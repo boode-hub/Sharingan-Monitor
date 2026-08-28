@@ -1,16 +1,9 @@
 # Funding links shown as a "Sponsor" button at the top of the repo.
-#
-# TWO THINGS TO DO before these work - both lines are commented out on purpose,
-# because an unconfigured handle renders a Sponsor button that 404s.
-#
-# 1. GitHub Sponsors
-#    Enrol at https://github.com/sponsors (needs Stripe / bank details and
-#    manual approval - it is not automatic). Once approved, uncomment:
-#
+
+# Live: https://buymeacoffee.com/boode
+buy_me_a_coffee: boode
+
+# GitHub Sponsors - enrol at https://github.com/sponsors first. It needs Stripe
+# or bank details and manual approval, so it is not instant. Uncomment once the
+# listing is approved, otherwise the Sponsor button links to a 404.
 # github: boode-hub
-#
-# 2. Buy Me a Coffee
-#    Create a page at https://buymeacoffee.com and put the handle from your
-#    page URL here - buymeacoffee.com/<handle>. Then uncomment:
-#
-# buy_me_a_coffee: your-handle-here

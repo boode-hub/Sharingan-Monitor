@@ -106,10 +106,13 @@ found the hard way.
 
 ## Support
 
-This is free and always will be — every feature, no paywalls, no nags. If it
-made your taskbar better and you'd like to say thanks, there's a Sponsor button
-at the top of the repo. Entirely optional, and it changes nothing about the
-software.
+This is free and always will be — every feature, no paywalls, no nags.
+
+If it made your taskbar better and you'd like to say thanks:
+
+<a href="https://buymeacoffee.com/boode"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy me a coffee"></a>
+
+Entirely optional, and it changes nothing about the software.
 
 ## Disclaimer
 
