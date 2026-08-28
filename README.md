@@ -29,7 +29,7 @@ trust. One script you can read top to bottom.
 Nothing to compile and no installer. Never used GitHub before? Just follow along:
 
 <p align="center">
-  <img src="docs/demo-install.gif" width="420" alt="Downloading the ZIP from GitHub and running the script">
+  <img src="docs/Downlaod and Install.gif" width="420" alt="Downloading the ZIP from GitHub and running the script">
 </p>
 
 1. Click the green **Code** button near the top of this page, then **Download ZIP**.
