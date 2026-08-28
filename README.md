@@ -1,5 +1,10 @@
 # Sharingan Tray Monitor
 
+[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows&logoColor=white)](#requirements)
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE?style=flat-square&logo=powershell&logoColor=white)](#requirements)
+[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
+[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/boode)
+
 An animated Sharingan that lives in your Windows system tray and reacts to real
 system load. The eye awakens as your machine works harder — one tomoe, then two,
 then three, then Mangekyou — and spins faster the heavier the load.
@@ -11,6 +16,12 @@ trust. One script you can read top to bottom.
   <img src="docs/evolve.gif" width="450" alt="The Sharingan awakening in the system tray as CPU load rises">
   <br>
   <em>Real capture from the tray — dormant, then awakening as the machine works.</em>
+</p>
+
+<p align="center">
+  <a href="https://buymeacoffee.com/boode">
+    <img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-Support%20this%20project-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy me a coffee" height="42">
+  </a>
 </p>
 
 ## How it reacts
@@ -32,7 +43,7 @@ into each stage instead of popping.
 No installer. Download or clone, then:
 
 ```
-powershell -ExecutionPolicy Bypass -File p2.ps1
+powershell -ExecutionPolicy Bypass -File Sharingan.ps1
 ```
 
 That is the whole thing. It appears in your system tray immediately.
@@ -60,6 +71,7 @@ Customize               >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
                         |  Shuffle     >  cycle eyes randomly, on a timer
                         |  Glow           makes the colour glow
                         |  Reset to Defaults
+Buy me a coffee            opens the support page in your browser
 Exit
 ```
 
@@ -100,9 +112,6 @@ The interesting parts, if you want to read the source:
 - **The tray pipeline** — a WinForms `Timer` under a real message pump at ~28fps,
   disposing the previous icon and calling `DestroyIcon` on every frame. Skipping
   that leaks GDI handles until the process dies.
-
-`PROJECT_PROMPT.txt` documents the full architecture, including the pitfalls
-found the hard way.
 
 ## Support
 

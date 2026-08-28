@@ -161,6 +161,7 @@ $ContextMenu = New-Object System.Windows.Forms.ContextMenuStrip
 $ToggleItem = New-Object System.Windows.Forms.ToolStripMenuItem("Swap to RAM Tracking")
 $StyleItem = New-Object System.Windows.Forms.ToolStripMenuItem("Eyes")
 $CustomItem = New-Object System.Windows.Forms.ToolStripMenuItem("Customize")
+$SupportItem = New-Object System.Windows.Forms.ToolStripMenuItem("Buy me a coffee")
 $ExitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Exit")
 
 # Build the Sharingan style menu from the list above so the menu, the shuffle pool
@@ -177,6 +178,8 @@ foreach ($styleName in $global:SharinganStyles) {
 $ContextMenu.Items.Add($ToggleItem) | Out-Null
 $ContextMenu.Items.Add($StyleItem) | Out-Null
 $ContextMenu.Items.Add($CustomItem) | Out-Null
+$ContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+$ContextMenu.Items.Add($SupportItem) | Out-Null
 $ContextMenu.Items.Add($ExitItem) | Out-Null
 $NotifyIcon.ContextMenuStrip = $ContextMenu
 
@@ -198,6 +201,12 @@ function Set-EyeStyle($styleName) {
         $global:selectedEyeStyle = $styleName
     }
 }
+
+$SupportItem.add_Click({
+        # One menu entry, opened only when clicked. No popups, no reminders -
+        # the README promises no nags and this has to stay true to that.
+        try { Start-Process "https://buymeacoffee.com/boode" } catch {}
+    })
 
 $ExitItem.add_Click({
         $global:running = $false

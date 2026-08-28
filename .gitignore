@@ -16,3 +16,6 @@ _*.log
 
 # Source recordings live in the repo root; the published copies are in docs/
 /*.gif
+
+# Internal build spec - kept locally, not published
+PROJECT_PROMPT.txt

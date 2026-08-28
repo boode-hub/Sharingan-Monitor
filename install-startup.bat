@@ -2,11 +2,11 @@
 REM Sharingan Monitor - enable at startup and launch now.
 REM No admin needed: this writes to the per-user Run key only.
 
-set "SCRIPT=%~dp0p2.ps1"
+set "SCRIPT=%~dp0Sharingan.ps1"
 set "VBS=%~dp0launcher.vbs"
 
 if not exist "%SCRIPT%" (
-    echo ERROR: p2.ps1 not found next to this batch file.
+    echo ERROR: Sharingan.ps1 not found next to this batch file.
     pause
     exit /b 1
 )
