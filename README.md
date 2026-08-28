@@ -120,18 +120,3 @@ Masashi Kishimoto, Shueisha, TV Tokyo, or Viz Media.
 property of their respective owners. This project ships **no** artwork, audio or
 other assets from any Naruto work — every graphic is generated at runtime by the
 drawing code in this repository. The code is MIT licensed; see `LICENSE`.
-
-## Recording a demo
-
-The tray icon is only 16x16, so recording the taskbar directly gives you
-something too small to read. What worked here:
-
-1. [ScreenToGif](https://www.screentogif.com) — free, open source, Windows.
-2. Load the machine so the eye actually evolves on camera:
-   `powershell -Command "1..8 | ForEach-Object { Start-Job { while($true){} } }"`
-   and `powershell -Command "Get-Job | Remove-Job -Force"` to stop.
-3. Record a tight region around the icon, then scale it up in ScreenToGif's
-   editor — or record with Windows Magnifier docked at 4x.
-4. Keep it short. Dormant, awakening, then spinning at Mangekyou is the whole
-   story and it fits in five seconds.
-5. Export under about 5MB so it plays inline on GitHub and Reddit.
