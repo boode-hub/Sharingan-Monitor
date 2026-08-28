@@ -1,0 +1,973 @@
+# Sharingan CPU/RAM System Tray Monitor
+# Native PowerShell script using .NET System.Drawing (GDI+) and NotifyIcon
+
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# 1. Declare Win32 Metrics and DestroyIcon API with high-accuracy Performance Counter
+$MetricsSignature = @"
+using System;
+using System.Runtime.InteropServices;
+using System.Diagnostics;
+
+public class Win32 {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MEMORYSTATUSEX {
+        public uint dwLength;
+        public uint dwMemoryLoad;
+        public ulong ullTotalPhys;
+        public ulong ullAvailPhys;
+        public ulong ullTotalPage;
+        public ulong ullAvailPage;
+        public ulong ullTotalVirtual;
+        public ulong ullAvailVirtual;
+        public ulong ullAvailExtendedVirtual;
+    }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    public static extern bool GlobalMemoryStatusEx(ref MEMORYSTATUSEX lpBuffer);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    public static extern bool DestroyIcon(IntPtr hIcon);
+
+    private static PerformanceCounter cpuCounter;
+
+    static Win32() {
+        try {
+            // Using standard WMI-backed PerformanceCounter which exactly matches Windows Task Manager
+            cpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total");
+            cpuCounter.NextValue(); // Initial sample (will read 0)
+        } catch {
+            cpuCounter = null;
+        }
+    }
+
+    public static double GetCPULoad() {
+        if (cpuCounter == null) return 0.0;
+        try {
+            return (double)cpuCounter.NextValue();
+        } catch {
+            return 0.0;
+        }
+    }
+
+    public static double GetRAMLoad() {
+        MEMORYSTATUSEX mem = new MEMORYSTATUSEX();
+        mem.dwLength = (uint)Marshal.SizeOf(typeof(MEMORYSTATUSEX));
+        if (!GlobalMemoryStatusEx(ref mem)) return 0;
+        return mem.dwMemoryLoad;
+    }
+}
+"@
+Add-Type -TypeDefinition $MetricsSignature
+
+# 2. Global State Variables
+$global:running = $true
+$global:monitoringModeIsRAM = $false       # False = CPU, True = RAM
+$global:currentLoadPercent = [Win32]::GetCPULoad()
+$global:selectedEyeStyle = "Itachi"        # Default set to Itachi
+
+$global:currentStage = 0.0                 # From 0.0 to 4.0
+$global:rotationAngle = 0.0
+
+# All selectable Sharingan styles, in menu order. Also the pool the shuffle draws from.
+$global:SharinganStyles = @(
+    "Itachi", "Obito", "Kakashi", "Madara", "Izuna", "Sasuke", "Shisui",
+    "Indra", "Shin", "Sarada", "Naka", "Baru", "Rai", "Naori", "Fugaku",
+    "Nanashi", "Madara Eye 2", "Sasuke Eye 2"
+)
+
+# Factory defaults. Reset restores exactly these.
+$global:Defaults = @{
+    Thresholds     = @(15.0, 35.0, 55.0, 75.0)   # load % that unlocks tomoe 1, 2, 3, Mangekyou
+    ColorR         = 220
+    ColorG         = 10
+    ColorB         = 15
+    Glow           = $false
+    Speed          = 1.0
+    Shuffle        = $false
+    ShuffleSeconds = 10
+    Style          = "Itachi"
+}
+
+# Live settings (populated by Reset-Defaults, then overwritten by the saved file if present)
+$global:thresholds = @(15.0, 35.0, 55.0, 75.0)
+$global:eyeColor = [System.Drawing.Color]::FromArgb(220, 10, 15)
+$global:glowOn = $false
+$global:speedMult = 1.0
+$global:shuffleOn = $false
+$global:shuffleSeconds = 10
+
+$global:SettingsPath = Join-Path $PSScriptRoot "settings.json"
+
+# 2b. Settings Persistence
+function Save-Settings {
+    try {
+        [PSCustomObject]@{
+            Thresholds     = $global:thresholds
+            ColorR         = $global:eyeColor.R
+            ColorG         = $global:eyeColor.G
+            ColorB         = $global:eyeColor.B
+            Glow           = $global:glowOn
+            Speed          = $global:speedMult
+            Shuffle        = $global:shuffleOn
+            ShuffleSeconds = $global:shuffleSeconds
+            Style          = $global:selectedEyeStyle
+        } | ConvertTo-Json | Set-Content -Path $global:SettingsPath -Encoding UTF8
+    }
+    catch {
+        # A read-only folder should never take the tray icon down with it.
+    }
+}
+
+function Load-Settings {
+    if (-not (Test-Path $global:SettingsPath)) { return }
+    try {
+        $s = Get-Content -Path $global:SettingsPath -Raw | ConvertFrom-Json
+        if ($s.Thresholds -and $s.Thresholds.Count -eq 4) {
+            $global:thresholds = @($s.Thresholds | ForEach-Object { [double]$_ })
+        }
+        $global:eyeColor = [System.Drawing.Color]::FromArgb([int]$s.ColorR, [int]$s.ColorG, [int]$s.ColorB)
+        $global:glowOn = [bool]$s.Glow
+        $global:speedMult = [double]$s.Speed
+        $global:shuffleOn = [bool]$s.Shuffle
+        $global:shuffleSeconds = [int]$s.ShuffleSeconds
+        if ($global:SharinganStyles -contains $s.Style) { $global:selectedEyeStyle = $s.Style }
+    }
+    catch {
+        # Corrupt file: fall back to whatever defaults are already loaded.
+    }
+}
+
+function Reset-Defaults {
+    $d = $global:Defaults
+    $global:thresholds = @($d.Thresholds)
+    $global:eyeColor = [System.Drawing.Color]::FromArgb($d.ColorR, $d.ColorG, $d.ColorB)
+    $global:glowOn = $d.Glow
+    $global:speedMult = $d.Speed
+    $global:shuffleOn = $d.Shuffle
+    $global:shuffleSeconds = $d.ShuffleSeconds
+    Set-EyeStyle $d.Style
+}
+
+# 3. GUI Elements Setup
+$NotifyIcon = New-Object System.Windows.Forms.NotifyIcon
+$NotifyIcon.Visible = $true
+$NotifyIcon.Text = "Sharingan Monitor"
+
+# Context Menu
+$ContextMenu = New-Object System.Windows.Forms.ContextMenuStrip
+
+$ToggleItem = New-Object System.Windows.Forms.ToolStripMenuItem("Swap to RAM Tracking")
+$StyleItem = New-Object System.Windows.Forms.ToolStripMenuItem("Eyes")
+$CustomItem = New-Object System.Windows.Forms.ToolStripMenuItem("Customize")
+$ExitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Exit")
+
+# Build the Sharingan style menu from the list above so the menu, the shuffle pool
+# and the check marks can never drift out of sync.
+$global:StyleMenuItems = @{}
+foreach ($styleName in $global:SharinganStyles) {
+    $item = New-Object System.Windows.Forms.ToolStripMenuItem($styleName)
+    $item.Tag = $styleName
+    $item.add_Click({ Set-EyeStyle $this.Tag })
+    $global:StyleMenuItems[$styleName] = $item
+    $StyleItem.DropDownItems.Add($item) | Out-Null
+}
+
+$ContextMenu.Items.Add($ToggleItem) | Out-Null
+$ContextMenu.Items.Add($StyleItem) | Out-Null
+$ContextMenu.Items.Add($CustomItem) | Out-Null
+$ContextMenu.Items.Add($ExitItem) | Out-Null
+$NotifyIcon.ContextMenuStrip = $ContextMenu
+
+# Event Bindings
+$ToggleItem.add_Click({
+        $global:monitoringModeIsRAM = -not $global:monitoringModeIsRAM
+        if ($global:monitoringModeIsRAM) {
+            $ToggleItem.Text = "Swap to CPU Tracking"
+        }
+        else {
+            $ToggleItem.Text = "Swap to RAM Tracking"
+        }
+    })
+
+function Set-EyeStyle($styleName) {
+    foreach ($mi in $global:StyleMenuItems.Values) { $mi.Checked = $false }
+    if ($global:StyleMenuItems.ContainsKey($styleName)) {
+        $global:StyleMenuItems[$styleName].Checked = $true
+        $global:selectedEyeStyle = $styleName
+    }
+}
+
+$ExitItem.add_Click({
+        $global:running = $false
+        [System.Windows.Forms.Application]::ExitThread()   # stops the message pump in section 6
+    })
+
+# Apply saved settings (or stay on defaults), then sync the menu check mark.
+Load-Settings
+Set-EyeStyle $global:selectedEyeStyle
+
+
+# 3b. Customize Submenu
+# Everything lives in the tray context menu itself. A tray app has no main window,
+# so a pop-up Form has nothing to own it: Windows refuses to activate it while
+# another app holds the foreground, and it lands wherever the last screen was.
+# ToolStripMenuItems have none of those problems - the shell owns the menu window.
+
+# Turn an existing menu item into a radio-style list: one entry per value, the
+# current one check-marked. $values is a list of @{ Text = "..."; Value = ... }.
+function Fill-ChoiceMenu($menuItem, $values, $getCurrent, $onPick) {
+    foreach ($v in $values) {
+        $mi = New-Object System.Windows.Forms.ToolStripMenuItem($v.Text)
+        $mi.Tag = $v.Value
+        $mi.add_Click({
+                & $this.Owner.Tag.OnPick $this.Tag
+                Save-Settings
+                Sync-CustomMenu
+            })
+        $menuItem.DropDownItems.Add($mi) | Out-Null
+    }
+    # Stash the handlers on the dropdown so each item can reach them via $this.Owner.
+    $menuItem.DropDown.Tag = @{ OnPick = $onPick; GetCurrent = $getCurrent }
+    $global:ChoiceMenus += $menuItem
+    return $menuItem
+}
+
+# Same, but creates the submenu under $parent first.
+function Add-ChoiceMenu($parent, $label, $values, $getCurrent, $onPick) {
+    $sub = New-Object System.Windows.Forms.ToolStripMenuItem($label)
+    $parent.DropDownItems.Add($sub) | Out-Null
+    return (Fill-ChoiceMenu $sub $values $getCurrent $onPick)
+}
+
+# Re-tick every check mark from current state. Cheap, and keeps one source of truth.
+function Sync-CustomMenu {
+    foreach ($sub in $global:ChoiceMenus) {
+        $current = & $sub.DropDown.Tag.GetCurrent
+        foreach ($mi in $sub.DropDownItems) {
+            $mi.Checked = ($mi.Tag -eq $current)
+        }
+    }
+    $global:GlowItem.Checked = $global:glowOn
+    $global:ShuffleToggle.Checked = $global:shuffleOn
+    $global:ColorSwatchItem.Text = "Current: $(Get-ColorName $global:eyeColor)"
+}
+
+$global:ColorPresets = @(
+    @{ Text = "Sharingan Red"; Value = @(220, 10, 15) }
+    @{ Text = "Crimson";       Value = @(160, 0, 20) }
+    @{ Text = "Orange";        Value = @(240, 110, 20) }
+    @{ Text = "Gold";          Value = @(230, 180, 30) }
+    @{ Text = "Green";         Value = @(40, 190, 80) }
+    @{ Text = "Cyan";          Value = @(0, 190, 210) }
+    @{ Text = "Blue";          Value = @(40, 120, 240) }
+    @{ Text = "Violet";        Value = @(150, 80, 230) }
+    @{ Text = "Magenta";       Value = @(230, 60, 170) }
+    @{ Text = "White";         Value = @(240, 240, 240) }
+)
+
+function Get-ColorName($c) {
+    foreach ($p in $global:ColorPresets) {
+        if ($c.R -eq $p.Value[0] -and $c.G -eq $p.Value[1] -and $c.B -eq $p.Value[2]) { return $p.Text }
+    }
+    return "$($c.R), $($c.G), $($c.B)"
+}
+
+$global:ChoiceMenus = @()
+
+# --- Thresholds ----------------------------------------------------------
+# Percentages offered per stage. 5% steps is plenty for a tray toy and keeps
+# the menu to a readable length.
+$percentChoices = @(0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 95 |
+    ForEach-Object { @{ Text = "$_%"; Value = [double]$_ } })
+
+$ThresholdsItem = New-Object System.Windows.Forms.ToolStripMenuItem("Thresholds")
+$CustomItem.DropDownItems.Add($ThresholdsItem) | Out-Null
+
+$stageLabels = @("1st Tomoe", "2nd Tomoe", "3rd Tomoe", "Mangekyou")
+for ($i = 0; $i -lt 4; $i++) {
+    $idx = $i
+    $global:ChoiceMenus += Add-ChoiceMenu $ThresholdsItem $stageLabels[$i] $percentChoices `
+    { $global:thresholds[$idx] }.GetNewClosure() `
+    {
+        param($v)
+        $t = @($global:thresholds)
+        # Clamp the picked value so the stages below and above it still have room
+        # for a 5% step each. Without this, dragging the top stage down squashes
+        # the lower ones together and a stage becomes unreachable.
+        $lo = $idx * 5.0
+        $hi = 100.0 - ((3 - $idx) * 5.0)
+        $t[$idx] = [Math]::Max($lo, [Math]::Min([double]$v, $hi))
+        # Keep the four strictly ascending by pushing the neighbours out of the way.
+        for ($j = $idx + 1; $j -lt 4; $j++) { if ($t[$j] -le $t[$j - 1]) { $t[$j] = $t[$j - 1] + 5.0 } }
+        for ($j = $idx - 1; $j -ge 0; $j--) { if ($t[$j] -ge $t[$j + 1]) { $t[$j] = $t[$j + 1] - 5.0 } }
+        $global:thresholds = $t
+    }.GetNewClosure()
+}
+
+# --- Color ---------------------------------------------------------------
+$ColorItem = New-Object System.Windows.Forms.ToolStripMenuItem("Color")
+$CustomItem.DropDownItems.Add($ColorItem) | Out-Null
+
+$global:ColorSwatchItem = New-Object System.Windows.Forms.ToolStripMenuItem("Current: ")
+$global:ColorSwatchItem.Enabled = $false
+$ColorItem.DropDownItems.Add($global:ColorSwatchItem) | Out-Null
+$ColorItem.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+
+foreach ($preset in $global:ColorPresets) {
+    $mi = New-Object System.Windows.Forms.ToolStripMenuItem($preset.Text)
+    $mi.Tag = $preset.Value
+    $mi.add_Click({
+            $global:eyeColor = [System.Drawing.Color]::FromArgb($this.Tag[0], $this.Tag[1], $this.Tag[2])
+            Save-Settings
+            Sync-CustomMenu
+        })
+    $ColorItem.DropDownItems.Add($mi) | Out-Null
+}
+
+$ColorItem.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+$PickColorItem = New-Object System.Windows.Forms.ToolStripMenuItem("Pick a Color...")
+$PickColorItem.add_Click({
+        # ColorDialog is a shell-owned modal dialog, so it activates correctly even
+        # though we have no main window. The animation pauses while it is open.
+        $dlg = New-Object System.Windows.Forms.ColorDialog
+        $dlg.FullOpen = $true
+        $dlg.Color = $global:eyeColor
+        if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
+            $global:eyeColor = $dlg.Color
+            Save-Settings
+            Sync-CustomMenu
+        }
+        $dlg.Dispose()
+    })
+$ColorItem.DropDownItems.Add($PickColorItem) | Out-Null
+
+# --- Speed ---------------------------------------------------------------
+$speedChoices = @(0.2, 0.4, 0.6, 0.8, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0 |
+    ForEach-Object { @{ Text = ("{0:N2}x" -f $_); Value = [double]$_ } })
+$SpeedItem = New-Object System.Windows.Forms.ToolStripMenuItem("Speed")
+$CustomItem.DropDownItems.Add($SpeedItem) | Out-Null
+Fill-ChoiceMenu $SpeedItem $speedChoices `
+{ $global:speedMult } `
+{ param($v) $global:speedMult = [double]$v } | Out-Null
+
+# --- Shuffle -------------------------------------------------------------
+$ShuffleItem = New-Object System.Windows.Forms.ToolStripMenuItem("Shuffle")
+$CustomItem.DropDownItems.Add($ShuffleItem) | Out-Null
+
+$global:ShuffleToggle = New-Object System.Windows.Forms.ToolStripMenuItem("Randomly Cycle Eyes")
+$global:ShuffleToggle.add_Click({
+        $global:shuffleOn = -not $global:shuffleOn
+        Save-Settings
+        Sync-CustomMenu
+    })
+$ShuffleItem.DropDownItems.Add($global:ShuffleToggle) | Out-Null
+$ShuffleItem.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+
+$intervalChoices = @(
+    @{ Text = "Every 5 seconds";  Value = 5 }
+    @{ Text = "Every 10 seconds"; Value = 10 }
+    @{ Text = "Every 30 seconds"; Value = 30 }
+    @{ Text = "Every minute";     Value = 60 }
+    @{ Text = "Every 5 minutes";  Value = 300 }
+    @{ Text = "Every 15 minutes"; Value = 900 }
+)
+Add-ChoiceMenu $ShuffleItem "Interval" $intervalChoices `
+{ $global:shuffleSeconds } `
+{ param($v) $global:shuffleSeconds = [int]$v } | Out-Null
+
+# --- Glow ----------------------------------------------------------------
+# A single on/off, so it is the menu item itself rather than a submenu holding
+# one toggle - one click instead of two.
+$global:GlowItem = New-Object System.Windows.Forms.ToolStripMenuItem("Glow")
+$global:GlowItem.add_Click({
+        $global:glowOn = -not $global:glowOn
+        Save-Settings
+        Sync-CustomMenu
+    })
+$CustomItem.DropDownItems.Add($global:GlowItem) | Out-Null
+
+# --- Reset ---------------------------------------------------------------
+$CustomItem.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+$ResetItem = New-Object System.Windows.Forms.ToolStripMenuItem("Reset to Defaults")
+$ResetItem.add_Click({
+        Reset-Defaults
+        Save-Settings
+        Sync-CustomMenu
+    })
+$CustomItem.DropDownItems.Add($ResetItem) | Out-Null
+
+Sync-CustomMenu
+
+# Warm up CPU counter
+Start-Sleep -Milliseconds 200
+[Win32]::GetCPULoad() | Out-Null
+
+# 4. Drawing Helper
+# Draws a path of overlapping circles to form smooth, anti-aliased curves
+function Fill-CurvedBlade($g, $brush, $baseAngle, $startRadius, $length, $scale, $curveFactor, $maxWidth) {
+    if ($scale -le 0.01) { return }
+    $steps = 30
+    for ($k = 0; $k -le $steps; $k++) {
+        $t = $k / $steps
+        $r = $startRadius + ($t * $length * $scale)
+        $currAngle = $baseAngle + ($curveFactor * [Math]::Pow($t, 1.3))
+        $w = ($maxWidth * (1.0 - $t) * $scale) + 0.5
+        $bx = 64.0 + $r * [Math]::Cos($currAngle)
+        $by = 64.0 + $r * [Math]::Sin($currAngle)
+        $g.FillEllipse($brush, [float]($bx - $w), [float]($by - $w), [float]($w * 2), [float]($w * 2))
+    }
+}
+
+# 5. Sharingan Drawing Routine (128x128 High Resolution)
+# E: Current morph stage (0.0 to 4.0)
+# Angle: Rotation angle in radians
+function Get-SharinganIcon($E, $Angle, $Style) {
+    # 128x128 pixel double-resolution canvas
+    $bmp = New-Object System.Drawing.Bitmap(128, 128)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    
+    # Configure ultra-high-quality GDI+ options
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+    $g.Clear([System.Drawing.Color]::Transparent)
+
+    $redBrush = New-Object System.Drawing.SolidBrush($global:eyeColor)
+    $blackBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Black)
+    $borderPen = New-Object System.Drawing.Pen([System.Drawing.Color]::Black, 4.5)
+
+    # A0. Optional glow: purely a colour change - the eye keeps exactly the same
+    # size and geometry either way. Push the colour to full saturation, then lift
+    # it toward white so it reads as lit-from-within rather than just lighter.
+    $eyeDraw = $global:eyeColor
+    if ($global:glowOn) {
+        $peak = [Math]::Max($eyeDraw.R, [Math]::Max($eyeDraw.G, $eyeDraw.B))
+        if ($peak -lt 1) { $peak = 1 }
+        $k = 255.0 / $peak
+        $lift = 0.28
+        $eyeDraw = [System.Drawing.Color]::FromArgb(
+            [int][Math]::Min(255, ($eyeDraw.R * $k) + ((255 - ($eyeDraw.R * $k)) * $lift)),
+            [int][Math]::Min(255, ($eyeDraw.G * $k) + ((255 - ($eyeDraw.G * $k)) * $lift)),
+            [int][Math]::Min(255, ($eyeDraw.B * $k) + ((255 - ($eyeDraw.B * $k)) * $lift)))
+        $redBrush.Dispose()
+        $redBrush = New-Object System.Drawing.SolidBrush($eyeDraw)
+
+        # Faint bloom into the 6px canvas margin. Costs no eye size because the
+        # sclera below still draws at its normal 6,6,116,116.
+        $bloom = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(30, $eyeDraw.R, $eyeDraw.G, $eyeDraw.B))
+        for ($gi = 0; $gi -lt 4; $gi++) {
+            $gr = 64.0 - ($gi * 1.2)
+            $g.FillEllipse($bloom, [float](64.0 - $gr), [float](64.0 - $gr), [float]($gr * 2), [float]($gr * 2))
+        }
+        $bloom.Dispose()
+    }
+
+    # A. Draw Sclera (Base Eye Background)
+    $g.FillEllipse($redBrush, 6, 6, 116, 116)
+    $g.DrawEllipse($borderPen, 6, 6, 116, 116)
+
+    # B. Draw Inner Ring (Fades in for tomoes, fades out for Mangekyou)
+    $ringAlpha = 0
+    if ($E -lt 1.0) {
+        $ringAlpha = [int]($E * 255)
+    }
+    elseif ($E -ge 1.0 -and $E -lt 3.0) {
+        $ringAlpha = 255
+    }
+    elseif ($E -ge 3.0 -and $E -le 4.0) {
+        $ringAlpha = [int]((4.0 - $E) * 255)
+    }
+    
+    if ($Style -eq "Madara" -and $E -ge 3.0) {
+        $ringAlpha = 255
+    }
+
+    if ($ringAlpha -gt 0) {
+        $ringColor = [System.Drawing.Color]::FromArgb($ringAlpha, 0, 0, 0)
+        $ringPen = New-Object System.Drawing.Pen($ringColor, 3.2)
+        $g.DrawEllipse($ringPen, 29, 29, 70, 70)
+        $ringPen.Dispose()
+    }
+
+    # C. Draw Center Pupil
+    $pupilRadius = 14.0
+    
+    if ($E -ge 3.0) {
+        $mScale = $E - 3.0
+        if ($Style -eq "Sasuke") {
+            $pupilRadius = 14.0 - (7.0 * $mScale)
+        }
+        elseif ($Style -eq "Sasuke Eye 2") {
+            $pupilRadius = 14.0 - (5.5 * $mScale)
+        }
+        elseif ($Style -eq "Madara") {
+            $pupilRadius = 14.0 + (3.0 * $mScale)
+        }
+        elseif ($Style -eq "Madara Eye 2") {
+            $pupilRadius = 14.0 + (2.2 * $mScale)
+        }
+        elseif ($Style -eq "Obito") {
+            $pupilRadius = 13.0 + (2.0 * $mScale)
+        }
+        elseif ($Style -eq "Nanashi") {
+            $pupilRadius = 12.0 + (1.0 * $mScale)
+        }
+        elseif ($Style -eq "Itachi") {
+            $pupilRadius = 13.0 + (1.0 * $mScale)
+        }
+    }
+    $g.FillEllipse($blackBrush, [float](64.0 - $pupilRadius), [float](64.0 - $pupilRadius), [float]($pupilRadius * 2), [float]($pupilRadius * 2))
+
+    # D. Draw Style-specific Evolution Effects (Stage >= 3.0)
+    $mScale = 0.0
+    if ($E -ge 3.0) {
+        $mScale = $E - 3.0
+    }
+    
+    if ($mScale -gt 0.0) {
+        if ($Style -eq "Itachi") {
+            for ($i = 0; $i -lt 3; $i++) {
+                $baseAngle = $Angle + ($i * 2 * [Math]::PI / 3)
+                Fill-CurvedBlade $g $blackBrush $baseAngle 13.0 40.0 $mScale 1.4 12.0
+            }
+        }
+        elseif ($Style -eq "Obito") {
+            for ($i = 0; $i -lt 4; $i++) {
+                $baseAngle = $Angle + ($i * [Math]::PI / 2)
+                Fill-CurvedBlade $g $blackBrush $baseAngle 12.0 36.0 $mScale 1.6 10.0
+            }
+        }
+        elseif ($Style -eq "Madara") {
+            $originalState = $g.Save()
+            $g.TranslateTransform(64.0, 64.0)
+            $rotDeg = ($Angle * 180.0 / [Math]::PI)
+            $g.RotateTransform($rotDeg)
+            $outerR = 35.0
+            $wedgeWidth = 34.0
+            for ($i = 0; $i -lt 3; $i++) {
+                $startDeg = ($i * 120.0) - ($wedgeWidth / 2.0)
+                $scaledR = $outerR * $mScale
+                if ($scaledR -gt 2) {
+                    $g.FillPie($blackBrush, [float](-$scaledR), [float](-$scaledR), [float]($scaledR * 2), [float]($scaledR * 2), [float]$startDeg, [float]$wedgeWidth)
+                }
+            }
+            $g.Restore($originalState)
+            # No centre dot here: section C already enlarges Madara's pupil to
+            # 14 + 3*mScale, which completely covers a 3.5-radius dot.
+        }
+        elseif ($Style -eq "Izuna") {
+            for ($i = 0; $i -lt 3; $i++) {
+                $baseAngle = $Angle + ($i * 2 * [Math]::PI / 3)
+                Fill-CurvedBlade $g $blackBrush $baseAngle 14.0 30.0 $mScale 1.0 9.0
+            }
+        }
+        elseif ($Style -eq "Sasuke") {
+            # Six-pointed star: three long ellipses at 60-degree spacing, each with
+            # an eye-coloured cutout so only the outline reads as black.
+            $originalState = $g.Save()
+            $g.TranslateTransform(64.0, 64.0)
+
+            $semiMajor = 50.0 * $mScale
+            $semiMinor = 13.0 * $mScale
+
+            for ($i = 0; $i -lt 3; $i++) {
+                $rotState = $g.Save()
+                $deg = ($Angle * 180.0 / [Math]::PI) + ($i * 60.0)
+                $g.RotateTransform($deg)
+
+                # Outer black ellipse
+                $g.FillEllipse($blackBrush, [float](-$semiMinor), [float](-$semiMajor), [float]($semiMinor * 2), [float]($semiMajor * 2))
+
+                # Inner cutout, fading in with the morph so it never pops
+                $starCutColor = [System.Drawing.Color]::FromArgb([int]($mScale * 255), $eyeDraw.R, $eyeDraw.G, $eyeDraw.B)
+                $starCutBrush = New-Object System.Drawing.SolidBrush($starCutColor)
+                $innerMajor = $semiMajor - 4.5
+                $innerMinor = $semiMinor - 3.5
+                if ($innerMinor -gt 0) {
+                    $g.FillEllipse($starCutBrush, [float](-$innerMinor), [float](-$innerMajor), [float]($innerMinor * 2), [float]($innerMajor * 2))
+                }
+                $starCutBrush.Dispose()
+
+                $g.Restore($rotState)
+            }
+            $g.Restore($originalState)
+
+            # Center black pupil
+            $centerRad = 9.0 * $mScale
+            $g.FillEllipse($blackBrush, [float](64.0 - $centerRad), [float](64.0 - $centerRad), [float]($centerRad * 2), [float]($centerRad * 2))
+        }
+        elseif ($Style -eq "Kakashi") {
+            # Three broad pinwheel blades. Wider and less coiled than Itachi's so
+            # the two read differently at 16px.
+            for ($i = 0; $i -lt 3; $i++) {
+                $baseAngle = $Angle + ($i * 2 * [Math]::PI / 3)
+                Fill-CurvedBlade $g $blackBrush $baseAngle 9.0 38.0 $mScale 1.15 13.0
+            }
+            $ringPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb([int]($mScale * 210), 0, 0, 0), 2.2)
+            $ringR = 30.0 * $mScale
+            if ($ringR -gt 1.0) {
+                $g.DrawEllipse($ringPen, [float](64.0 - $ringR), [float](64.0 - $ringR), [float]($ringR * 2), [float]($ringR * 2))
+            }
+            $ringPen.Dispose()
+        }
+        elseif ($Style -eq "Shisui") {
+            # Four-bladed pinwheel.
+            for ($i = 0; $i -lt 4; $i++) {
+                $baseAngle = $Angle + ($i * [Math]::PI / 2)
+                Fill-CurvedBlade $g $blackBrush $baseAngle 10.0 33.0 $mScale 1.05 10.0
+            }
+        }
+        elseif ($Style -eq "Indra") {
+            for ($i = 0; $i -lt 3; $i++) {
+                $baseAngle = $Angle + ($i * 2 * [Math]::PI / 3)
+                Fill-CurvedBlade $g $blackBrush $baseAngle 14.0 30.0 $mScale 1.0 9.0
+            }
+            for ($i = 0; $i -lt 3; $i++) {
+                $tipAngle = $Angle + ($i * 2 * [Math]::PI / 3) + 0.9
+                $tipRadius = 14.0 + (30.0 * $mScale)
+                $tx = 64.0 + ($tipRadius * [Math]::Cos($tipAngle))
+                $ty = 64.0 + ($tipRadius * [Math]::Sin($tipAngle))
+                $tipRadiusSmall = 5.0 * $mScale
+                $g.FillEllipse($blackBrush, [float]($tx - $tipRadiusSmall), [float]($ty - $tipRadiusSmall), [float]($tipRadiusSmall * 2), [float]($tipRadiusSmall * 2))
+            }
+        }
+        elseif ($Style -eq "Shin") {
+            $dotPositions = @(
+                @(-20.0, -25.0), @(18.0, -30.0), @(35.0, -10.0), @(-35.0, -8.0), @(25.0, 20.0),
+                @(-22.0, 28.0), @(5.0, -40.0), @(-5.0, 38.0), @(38.0, 12.0), @(-38.0, 15.0),
+                @(15.0, 35.0), @(-18.0, -18.0), @(22.0, -18.0), @(0.0, -35.0), @(30.0, -30.0)
+            )
+            # Spin the whole scatter about the centre - the dots used to sit at
+            # fixed coordinates, so this was the one pattern that never moved.
+            $cosA = [Math]::Cos($Angle)
+            $sinA = [Math]::Sin($Angle)
+            foreach ($pos in $dotPositions) {
+                $dotRadius = ([Math]::Abs($pos[0]) + [Math]::Abs($pos[1])) % 4.0 + 1.5
+                $dotRadius *= $mScale
+                if ($dotRadius -le 0.1) { continue }
+                $rx = ($pos[0] * $cosA) - ($pos[1] * $sinA)
+                $ry = ($pos[0] * $sinA) + ($pos[1] * $cosA)
+                $dx = 64.0 + ($rx * $mScale)
+                $dy = 64.0 + ($ry * $mScale)
+                $g.FillEllipse($blackBrush, [float]($dx - $dotRadius), [float]($dy - $dotRadius), [float]($dotRadius * 2), [float]($dotRadius * 2))
+            }
+        }
+        elseif ($Style -eq "Sarada") {
+            # Ring grows with the morph - it used to be hardcoded at 38,38,52,52
+            # and so appeared at full size while the blades were still specks.
+            $ringPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb([int]($mScale * 230), 0, 0, 0), 3.0)
+            $ringR = 26.0 * $mScale
+            if ($ringR -gt 1.0) {
+                $g.DrawEllipse($ringPen, [float](64.0 - $ringR), [float](64.0 - $ringR), [float]($ringR * 2), [float]($ringR * 2))
+            }
+            $ringPen.Dispose()
+            for ($i = 0; $i -lt 3; $i++) {
+                $baseAngle = $Angle + ($i * 2 * [Math]::PI / 3) + 0.35
+                Fill-CurvedBlade $g $blackBrush $baseAngle 15.0 32.0 $mScale 1.1 9.5
+            }
+        }
+        elseif ($Style -eq "Naka") {
+            # Three orbiting dots on a ring. Previously the dots sat at fixed
+            # coordinates so the whole pattern was frozen, and it used the only
+            # white brush in the renderer, which read as a cartoon eye-glint.
+            $ringPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb([int]($mScale * 200), 0, 0, 0), 2.4)
+            $orbitR = 30.0 * $mScale
+            if ($orbitR -gt 1.0) {
+                $g.DrawEllipse($ringPen, [float](64.0 - $orbitR), [float](64.0 - $orbitR), [float]($orbitR * 2), [float]($orbitR * 2))
+            }
+            $ringPen.Dispose()
+
+            $dotR = 8.0 * $mScale
+            for ($i = 0; $i -lt 3; $i++) {
+                $dotAngle = $Angle + ($i * 2 * [Math]::PI / 3)
+                $dx = 64.0 + ($orbitR * [Math]::Cos($dotAngle))
+                $dy = 64.0 + ($orbitR * [Math]::Sin($dotAngle))
+                $g.FillEllipse($blackBrush, [float]($dx - $dotR), [float]($dy - $dotR), [float]($dotR * 2), [float]($dotR * 2))
+            }
+        }
+        elseif ($Style -eq "Baru") {
+            # Two opposed crescents that spin. Previously fixed arcs at 36,34 -
+            # frozen, popped in at full size, and barely visible at full morph.
+            $originalState = $g.Save()
+            $g.TranslateTransform(64.0, 64.0)
+            $g.RotateTransform(($Angle * 180.0 / [Math]::PI))
+
+            $outerR = 34.0 * $mScale
+            $innerR = 20.0 * $mScale
+            if ($outerR -gt 3.0) {
+                for ($i = 0; $i -lt 2; $i++) {
+                    $startDeg = ($i * 180.0) + 12.0
+                    $g.FillPie($blackBrush, [float](-$outerR), [float](-$outerR), [float]($outerR * 2), [float]($outerR * 2), [float]$startDeg, 156.0)
+                }
+                # Carve the crescents out with an eye-coloured disc.
+                $carve = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb([int]($mScale * 255), $eyeDraw.R, $eyeDraw.G, $eyeDraw.B))
+                $g.FillEllipse($carve, [float](-$innerR), [float](-$innerR), [float]($innerR * 2), [float]($innerR * 2))
+                $carve.Dispose()
+            }
+            $g.Restore($originalState)
+        }
+        elseif ($Style -eq "Rai") {
+            $ringPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb([int](160 + ($mScale * 60)), 0, 0, 0), 2.6)
+            $g.DrawEllipse($ringPen, 38, 34, 52, 52)
+            $ringPen.Dispose()
+            for ($i = 0; $i -lt 4; $i++) {
+                $baseAngle = $Angle + ($i * [Math]::PI / 2)
+                Fill-CurvedBlade $g $blackBrush $baseAngle 14.0 26.0 $mScale 1.25 8.5
+            }
+        }
+        elseif ($Style -eq "Naori") {
+            $radii = @(18.0, 28.0, 38.0)
+            foreach ($rVal in $radii) {
+                $ringPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb([int](140 + ($mScale * 80)), 0, 0, 0), 2.8)
+                $g.DrawEllipse($ringPen, [float](64.0 - ($rVal * $mScale)), [float](64.0 - ($rVal * $mScale)), [float]($rVal * 2.0 * $mScale), [float]($rVal * 2.0 * $mScale))
+                $ringPen.Dispose()
+            }
+            $spokePen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb([int](180 + ($mScale * 55)), 0, 0, 0), 2.5)
+            for ($i = 0; $i -lt 3; $i++) {
+                $angleOffset = $Angle + ($i * 2.0 * [Math]::PI / 3.0)
+                $innerX = 64.0 + ((18.0 * $mScale) * [Math]::Cos($angleOffset))
+                $innerY = 64.0 + ((18.0 * $mScale) * [Math]::Sin($angleOffset))
+                $outerX = 64.0 + ((38.0 * $mScale) * [Math]::Cos($angleOffset))
+                $outerY = 64.0 + ((38.0 * $mScale) * [Math]::Sin($angleOffset))
+                $g.DrawLine($spokePen, [float]$innerX, [float]$innerY, [float]$outerX, [float]$outerY)
+            }
+            $spokePen.Dispose()
+        }
+        elseif ($Style -eq "Fugaku") {
+            $ringPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb([int](140 + ($mScale * 80)), 0, 0, 0), 3.8)
+            $g.DrawEllipse($ringPen, 39, 39, 50, 50)
+            $ringPen.Dispose()
+            for ($i = 0; $i -lt 3; $i++) {
+                $baseAngle = $Angle + ($i * 2 * [Math]::PI / 3)
+                Fill-CurvedBlade $g $blackBrush $baseAngle 24.0 27.5 $mScale 1.2 11.5
+            }
+        }
+        elseif ($Style -eq "Nanashi") {
+            for ($i = 0; $i -lt 3; $i++) {
+                $baseAngle = $Angle + ($i * 2 * [Math]::PI / 3) + 0.6
+                Fill-CurvedBlade $g $blackBrush $baseAngle 10.0 24.0 $mScale 0.9 6.8
+            }
+            $g.FillEllipse($blackBrush, [float](64.0 - (2.5 * $mScale)), [float](64.0 - (2.5 * $mScale)), [float](5.0 * $mScale), [float](5.0 * $mScale))
+        }
+        elseif ($Style -eq "Madara Eye 2") {
+            $ringPen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb([int](150 + ($mScale * 70)), 0, 0, 0), 3.0)
+            $g.DrawEllipse($ringPen, 28, 28, 72, 72)
+            $ringPen.Dispose()
+            $originalState = $g.Save()
+            $g.TranslateTransform(64.0, 64.0)
+            $g.RotateTransform(($Angle * 180.0 / [Math]::PI))
+            for ($i = 0; $i -lt 3; $i++) {
+                $startDeg = ($i * 120.0) - 18.0
+                $scaledR = 30.0 * $mScale
+                if ($scaledR -gt 2) {
+                    $g.FillPie($blackBrush, [float](-$scaledR), [float](-$scaledR), [float]($scaledR * 2), [float]($scaledR * 2), [float]$startDeg, [float]34.0)
+                }
+            }
+            $g.Restore($originalState)
+            $g.DrawEllipse($borderPen, [float](64.0 - (16.0 * $mScale)), [float](64.0 - (16.0 * $mScale)), [float](32.0 * $mScale), [float](32.0 * $mScale))
+        }
+        elseif ($Style -eq "Sasuke Eye 2") {
+            $originalState = $g.Save()
+            $g.TranslateTransform(64.0, 64.0)
+            $semiMajor = 46.0 * $mScale
+            $semiMinor = 17.0 * $mScale
+            for ($i = 0; $i -lt 3; $i++) {
+                $rotState = $g.Save()
+                $deg = ($Angle * 180.0 / [Math]::PI) + ($i * 120.0)
+                $g.RotateTransform($deg)
+                $g.FillEllipse($blackBrush, [float](-$semiMinor), [float](-$semiMajor), [float]($semiMinor * 2), [float]($semiMajor * 2))
+                $g.Restore($rotState)
+            }
+            $g.Restore($originalState)
+            $g.DrawLine($borderPen, [float](64.0), [float](28.0 + (8.0 * $mScale)), [float](64.0), [float](100.0 - (8.0 * $mScale)))
+            $g.DrawLine($borderPen, [float](38.0 + (8.0 * $mScale)), [float](64.0), [float](90.0 - (8.0 * $mScale)), [float](64.0))
+        }
+    }
+
+    # E. Draw Standard Tomoes (Stages 1, 2, 3)
+    $t1_angle = 0.0
+    $t1_scale = 0.0
+    if ($E -le 1.0) {
+        $t1_scale = $E
+    }
+    elseif ($E -gt 1.0 -and $E -lt 3.0) {
+        $t1_scale = 1.0
+    }
+    else {
+        $t1_scale = 4.0 - $E
+    }
+
+    $t2_angle = [Math]::PI
+    $t2_scale = 0.0
+    if ($E -gt 1.0 -and $E -le 2.0) {
+        $t2_scale = $E - 1.0
+    }
+    elseif ($E -gt 2.0 -and $E -lt 3.0) {
+        $t2_scale = 1.0
+        $interp = $E - 2.0
+        $t2_angle = [Math]::PI - $interp * ([Math]::PI - (2 * [Math]::PI / 3))
+    }
+    elseif ($E -ge 3.0) {
+        $t2_scale = 4.0 - $E
+        $t2_angle = 2 * [Math]::PI / 3
+    }
+
+    $t3_angle = 4 * [Math]::PI / 3
+    $t3_scale = 0.0
+    if ($E -gt 2.0 -and $E -le 3.0) {
+        $t3_scale = $E - 2.0
+    }
+    elseif ($E -gt 3.0) {
+        $t3_scale = 4.0 - $E
+    }
+
+    $tomoes = @(
+        @{ Angle = $t1_angle; Scale = $t1_scale },
+        @{ Angle = $t2_angle; Scale = $t2_scale },
+        @{ Angle = $t3_angle; Scale = $t3_scale }
+    )
+
+    foreach ($tomoe in $tomoes) {
+        $scale = $tomoe.Scale
+        if ($scale -le 0.01) { continue }
+
+        $tomoeAngle = $Angle + $tomoe.Angle
+        $tomoeRadius = 35.0
+        $headRadius = 7.5 * $scale
+
+        $hx = 64.0 + $tomoeRadius * [Math]::Cos($tomoeAngle)
+        $hy = 64.0 + $tomoeRadius * [Math]::Sin($tomoeAngle)
+        $g.FillEllipse($blackBrush, [float]($hx - $headRadius), [float]($hy - $headRadius), [float]($headRadius * 2), [float]($headRadius * 2))
+
+        $tailLength = 0.75
+        $tailSteps = 12
+        for ($j = 0; $j -le $tailSteps; $j++) {
+            $tTail = $j / $tailSteps
+            $phi = $tomoeAngle + ($tTail * $tailLength * $scale)
+            
+            $tw = $headRadius * [Math]::Pow(1.0 - $tTail, 1.5)
+            if ($tw -le 0.1) { continue }
+
+            $tx = 64.0 + $tomoeRadius * [Math]::Cos($phi)
+            $ty = 64.0 + $tomoeRadius * [Math]::Sin($phi)
+            $g.FillEllipse($blackBrush, [float]($tx - $tw), [float]($ty - $tw), [float]($tw * 2), [float]($tw * 2))
+        }
+    }
+
+    # F. Cover cleanup
+    $redBrush.Dispose()
+    $blackBrush.Dispose()
+    $borderPen.Dispose()
+    $g.Dispose()
+
+    # Convert Bitmap to Handle
+    $hIcon = $bmp.GetHicon()
+    $icon = [System.Drawing.Icon]::FromHandle($hIcon)
+    $bmp.Dispose()
+    
+    return [PSCustomObject]@{
+        Icon   = $icon
+        Handle = $hIcon
+    }
+}
+
+# 6. Primary Application Animation Loop
+# Driven by a WinForms Timer under a real Application::Run message pump rather
+# than a while-loop calling DoEvents(). The old shape blocked the UI thread in
+# Start-Sleep for most of every tick, so any window opened from the tray menu
+# got almost no pump time and could never reliably activate or paint.
+$script:metricsTimer = 0
+$metricsInterval = 1000 # Query metrics every 1s
+$tickInterval = 35      # 35ms frame render rate (~28 FPS)
+$script:shuffleTimer = 0
+
+# Let the uninstall batch file find and stop this instance.
+try { $PID | Set-Content -Path (Join-Path $PSScriptRoot "sharingan.pid") -Encoding ASCII } catch {}
+
+$RenderFrame = {
+    # Update metrics at regular intervals
+    $script:metricsTimer += $tickInterval
+    if ($script:metricsTimer -ge $metricsInterval) {
+        $script:metricsTimer = 0
+        if ($global:monitoringModeIsRAM) {
+            $global:currentLoadPercent = [Win32]::GetRAMLoad()
+        }
+        else {
+            $global:currentLoadPercent = [Win32]::GetCPULoad()
+        }
+    }
+
+    # Shuffle: swap to a random eye every N seconds while enabled
+    if ($global:shuffleOn) {
+        $script:shuffleTimer += $tickInterval
+        if ($script:shuffleTimer -ge ($global:shuffleSeconds * 1000)) {
+            $script:shuffleTimer = 0
+            $pool = @($global:SharinganStyles | Where-Object { $_ -ne $global:selectedEyeStyle })
+            Set-EyeStyle ($pool | Get-Random)
+        }
+    }
+    else {
+        $script:shuffleTimer = 0
+    }
+
+    # Map current load percent to target evolution stage using the user thresholds
+    $targetStage = 0.0
+    for ($s = 0; $s -lt 4; $s++) {
+        if ($global:currentLoadPercent -ge $global:thresholds[$s]) { $targetStage = $s + 1.0 }
+    }
+
+    # Interpolate current stage towards target stage smoothly
+    $stageDiff = $targetStage - $global:currentStage
+    if ([Math]::Abs($stageDiff) -gt 0.01) {
+        $global:currentStage += $stageDiff * 0.12
+    }
+    else {
+        $global:currentStage = $targetStage
+    }
+
+    # Calculate rotation speed (spins faster under high load), scaled by the user multiplier
+    $speedFactor = 0.01
+    if ($global:currentLoadPercent -ge $global:thresholds[0]) {
+        $speedFactor = 0.02 + ($global:currentLoadPercent / 100.0) * 0.26
+    }
+    $speedFactor *= $global:speedMult
+
+    $global:rotationAngle += $speedFactor
+    if ($global:rotationAngle -ge (2 * [Math]::PI)) {
+        $global:rotationAngle -= (2 * [Math]::PI)
+    }
+
+    # Create next icon frame
+    $iconObj = Get-SharinganIcon $global:currentStage $global:rotationAngle $global:selectedEyeStyle
+    $oldIcon = $NotifyIcon.Icon
+
+    # Update system tray
+    $modeText = if ($global:monitoringModeIsRAM) { "RAM" } else { "CPU" }
+    $NotifyIcon.Icon = $iconObj.Icon
+    $NotifyIcon.Text = "Sharingan ($global:selectedEyeStyle $modeText): $([Math]::Round($global:currentLoadPercent, 1))%"
+
+    # Destroy the old icon objects to prevent GDI / system memory leaks
+    if ($oldIcon -ne $null) {
+        $oldIcon.Dispose()
+    }
+    [Win32]::DestroyIcon($iconObj.Handle) | Out-Null
+}
+
+$AnimTimer = New-Object System.Windows.Forms.Timer
+$AnimTimer.Interval = $tickInterval
+$AnimTimer.add_Tick($RenderFrame)
+$AnimTimer.Start()
+
+[System.Windows.Forms.Application]::Run()
+
+# 7. Exit Cleanup
+$AnimTimer.Stop()
+$AnimTimer.Dispose()
+Save-Settings
+try { [IO.File]::Delete((Join-Path $PSScriptRoot "sharingan.pid")) } catch {}
+$NotifyIcon.Visible = $false
+if ($NotifyIcon.Icon -ne $null) { $NotifyIcon.Icon.Dispose() }
+$NotifyIcon.Dispose()
+
+Write-Output "Sharingan Monitor terminated cleanly."
