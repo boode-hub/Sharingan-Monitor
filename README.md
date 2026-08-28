@@ -1,75 +1,127 @@
 # Sharingan Tray Monitor
 
-An animated Sharingan eye that lives in the Windows system tray and reacts to live
-system load. The eye evolves through five stages as CPU (or RAM) usage climbs, and
-spins faster the harder your machine is working.
+An animated Sharingan that lives in your Windows system tray and reacts to real
+system load. The eye awakens as your machine works harder — one tomoe, then two,
+then three, then Mangekyou — and spins faster the heavier the load.
 
-Pure PowerShell — no dependencies, no compiled binaries, no installer.
-`System.Drawing` (GDI+) for rendering, `System.Windows.Forms` for the tray icon.
+Pure PowerShell. No installer, no dependencies, no compiled binaries, nothing to
+trust. One script you can read top to bottom.
 
-## Stages
+<!-- Add a demo GIF here. See "Recording a demo" at the bottom of this file. -->
+<!-- ![demo](docs/demo.gif) -->
 
-| Load | Eye |
-|---|---|
-| below threshold 1 | plain eye, no tomoe |
-| threshold 1 | 1 tomoe |
-| threshold 2 | 2 tomoe |
-| threshold 3 | 3 tomoe |
-| threshold 4 | Mangekyou |
+## How it reacts
 
-Defaults are 15 / 35 / 55 / 75 %, all adjustable. Stages blend smoothly rather than
-snapping — the morph stage is a float and every element scales off it.
+| CPU / RAM load | Eye |
+| --- | --- |
+| below 15% | dormant — no tomoe |
+| 15% | 1 tomoe |
+| 35% | 2 tomoe |
+| 55% | 3 tomoe |
+| 75% | Mangekyou |
 
-## Running it
+Every threshold is adjustable. Stages blend smoothly rather than snapping — the
+morph is a floating-point value and every element scales off it, so the eye grows
+into each stage instead of popping.
+
+## Install
+
+No installer. Download or clone, then:
 
 ```
 powershell -ExecutionPolicy Bypass -File p2.ps1
 ```
 
+That is the whole thing. It appears in your system tray immediately.
+
+To start it automatically at login:
+
+```
+install-startup.bat
+```
+
+Undo that at any time with `remove-startup.bat`, which also stops the running
+instance. Both use the per-user registry key, so neither needs administrator
+rights.
+
+## Using it
+
 Right-click the tray icon:
 
 ```
-Swap to RAM Tracking
-Eyes         >  18 Sharingan styles
-Customize    >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
-             |  Color       >  10 presets + colour picker
-             |  Speed       >  0.20x .. 3.00x
-             |  Shuffle     >  on/off + interval
-             |  Glow           (brightens the eye colour)
-             |  Reset to Defaults
+Swap to RAM Tracking       toggle between CPU and RAM
+Eyes                    >  18 Sharingan styles
+Customize               >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
+                        |  Color       >  10 presets + full colour picker
+                        |  Speed       >  0.20x .. 3.00x rotation
+                        |  Shuffle     >  cycle eyes randomly, on a timer
+                        |  Glow           makes the colour glow
+                        |  Reset to Defaults
 Exit
 ```
 
-Settings persist to `settings.json` next to the script.
+Everything applies live. Settings persist to `settings.json` next to the script.
 
-## Start at login
+## The eyes
 
-```
-install-startup.bat     enable at login and launch now
-remove-startup.bat      remove from login and stop the running instance
-```
+Itachi · Obito · Kakashi · Madara · Izuna · Sasuke · Shisui · Indra · Shin ·
+Sarada · Naka · Baru · Rai · Naori · Fugaku · Nanashi · Madara Eye 2 ·
+Sasuke Eye 2
 
-Uses the per-user `HKCU\...\Run` key, so no admin prompt. A generated
-`launcher.vbs` shim starts PowerShell fully hidden — `-WindowStyle Hidden` on its
-own still flashes a console window at every boot.
+All eighteen are drawn from scratch with GDI+ at 128×128 and scaled down by
+Windows, which is what keeps them sharp at tray size. Every one rotates, and
+every pattern grows out of nothing as the stage builds.
 
-## Eyes
+## Requirements
 
-Itachi, Obito, Kakashi, Madara, Izuna, Sasuke, Shisui, Indra, Shin, Sarada, Naka,
-Baru, Rai, Naori, Fugaku, Nanashi, Madara Eye 2, Sasuke Eye 2.
+- Windows 10 or 11
+- Windows PowerShell 5.1 (ships with Windows — nothing to install)
 
-## Files
+## How it works
 
-| File | Purpose |
-|---|---|
-| `p2.ps1` | the application |
-| `install-startup.bat` / `remove-startup.bat` | login integration |
-| `PROJECT_PROMPT.txt` | full build spec — architecture, decisions, and the pitfalls found the hard way |
-| `p2.ps1.bak` | original script before any modifications |
-| `p2.ps1.pre-eyefix.bak` | state before the eye animation fixes |
+The interesting parts, if you want to read the source:
 
-## Notes
+- **Load sampling** — `PerformanceCounter("Processor", "% Processor Time", "_Total")`
+  for CPU, so the numbers match Task Manager, and `GlobalMemoryStatusEx` for RAM.
+- **The morph** — load maps to a target stage, and the current stage eases toward
+  it each frame. That easing is why the eye flows between stages.
+- **Rendering** — every frame draws a fresh 128×128 bitmap. Tomoe tails and
+  Mangekyou blades are runs of overlapping circles, which is crude but
+  anti-aliases beautifully.
+- **The tray pipeline** — a WinForms `Timer` under a real message pump at ~28fps,
+  disposing the previous icon and calling `DestroyIcon` on every frame. Skipping
+  that leaks GDI handles until the process dies.
 
-Sharingan, Mangekyou Sharingan and the character names are the intellectual
-property of Masashi Kishimoto / Shueisha. This is a personal, non-commercial
-project and is not affiliated with or endorsed by the rights holders.
+`PROJECT_PROMPT.txt` documents the full architecture, including the pitfalls
+found the hard way.
+
+## Support
+
+This is free and always will be — every feature, no paywalls, no nags. If it
+made your taskbar better and you'd like to say thanks, there's a Sponsor button
+at the top of the repo. Entirely optional, and it changes nothing about the
+software.
+
+## Disclaimer
+
+Unofficial fan software. Not affiliated with, endorsed by, or sponsored by
+Masashi Kishimoto, Shueisha, TV Tokyo, or Viz Media.
+
+"Sharingan", "Mangekyou Sharingan" and the character names are the intellectual
+property of their respective owners. This project ships **no** artwork, audio or
+other assets from any Naruto work — every graphic is generated at runtime by the
+drawing code in this repository. The code is MIT licensed; see `LICENSE`.
+
+## Recording a demo
+
+Notes for anyone wanting to capture it in action — the tray icon is only 16×16,
+so recording the taskbar directly produces something too small to read:
+
+1. Get [ScreenToGif](https://www.screentogif.com) — free, open source, Windows.
+2. Load the machine so the eye actually evolves. Any CPU burner works:
+   `powershell -Command "1..8 | ForEach-Object { Start-Job { while($true){} } }"`
+   then `Get-Job | Remove-Job -Force` to stop.
+3. Record a small region around the tray icon, then use ScreenToGif's editor to
+   scale it up — or record with Windows Magnifier running at 4× or 8×.
+4. Five seconds is plenty: dormant, awakening under load, spinning at Mangekyou.
+5. Export as GIF under about 5MB so it plays inline on GitHub and Reddit.
