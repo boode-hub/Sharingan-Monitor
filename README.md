@@ -24,6 +24,35 @@ trust. One script you can read top to bottom.
   </a>
 </p>
 
+## Download and install
+
+Nothing to compile and no installer. Never used GitHub before? Just follow along:
+
+<p align="center">
+  <img src="docs/demo-install.gif" width="820" alt="Downloading the ZIP from GitHub and running the script">
+</p>
+
+1. Click the green **Code** button near the top of this page, then **Download ZIP**.
+2. Right-click the downloaded ZIP, choose **Extract All**, and pick any folder.
+3. Open that folder, right-click **Sharingan.ps1**, and choose **Run with PowerShell**.
+
+The eye appears in your system tray straight away. Right-click it for the menu.
+
+> **If Windows blocks it:** right-click the ZIP *before* extracting, choose
+> **Properties**, tick **Unblock**, then extract. Windows flags files downloaded
+> from the internet, and this clears that flag.
+
+**Prefer the command line?**
+
+```
+powershell -ExecutionPolicy Bypass -File Sharingan.ps1
+```
+
+**Want it to start automatically when you log in?**
+
+Double-click `install-startup.bat`. Undo it any time with `remove-startup.bat`,
+which also stops the running instance. Neither needs administrator rights.
+
 ## How it reacts
 
 | CPU / RAM load | Eye |
@@ -37,26 +66,6 @@ trust. One script you can read top to bottom.
 Every threshold is adjustable. Stages blend smoothly rather than snapping — the
 morph is a floating-point value and every element scales off it, so the eye grows
 into each stage instead of popping.
-
-## Install
-
-No installer. Download or clone, then:
-
-```
-powershell -ExecutionPolicy Bypass -File Sharingan.ps1
-```
-
-That is the whole thing. It appears in your system tray immediately.
-
-To start it automatically at login:
-
-```
-install-startup.bat
-```
-
-Undo that at any time with `remove-startup.bat`, which also stops the running
-instance. Both use the per-user registry key, so neither needs administrator
-rights.
 
 ## Using it
 
