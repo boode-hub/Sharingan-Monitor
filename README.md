@@ -87,7 +87,7 @@ Exit
 Everything applies live. Settings persist to `settings.json` next to the script.
 
 <p align="center">
-  <img src="docs/customize.gif" width="420" alt="Walking through the Customize menu: thresholds, colour, speed, shuffle and glow">
+  <img src="docs/Customize.gif" width="420" alt="Walking through the Customize menu: thresholds, colour, speed, shuffle and glow">
   <br>
   <em>Every setting lives in the tray menu — no separate settings window.</em>
 </p>
