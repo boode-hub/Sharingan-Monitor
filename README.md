@@ -7,8 +7,11 @@ then three, then Mangekyou — and spins faster the heavier the load.
 Pure PowerShell. No installer, no dependencies, no compiled binaries, nothing to
 trust. One script you can read top to bottom.
 
-<!-- Add a demo GIF here. See "Recording a demo" at the bottom of this file. -->
-<!-- ![demo](docs/demo.gif) -->
+<p align="center">
+  <img src="docs/evolve.gif" width="450" alt="The Sharingan awakening in the system tray as CPU load rises">
+  <br>
+  <em>Real capture from the tray — dormant, then awakening as the machine works.</em>
+</p>
 
 ## How it reacts
 
@@ -62,6 +65,12 @@ Exit
 
 Everything applies live. Settings persist to `settings.json` next to the script.
 
+<p align="center">
+  <img src="docs/customize.gif" width="420" alt="Walking through the Customize menu: thresholds, colour, speed, shuffle and glow">
+  <br>
+  <em>Every setting lives in the tray menu — no separate settings window.</em>
+</p>
+
 ## The eyes
 
 Itachi · Obito · Kakashi · Madara · Izuna · Sasuke · Shisui · Indra · Shin ·
@@ -114,14 +123,15 @@ drawing code in this repository. The code is MIT licensed; see `LICENSE`.
 
 ## Recording a demo
 
-Notes for anyone wanting to capture it in action — the tray icon is only 16×16,
-so recording the taskbar directly produces something too small to read:
+The tray icon is only 16x16, so recording the taskbar directly gives you
+something too small to read. What worked here:
 
-1. Get [ScreenToGif](https://www.screentogif.com) — free, open source, Windows.
-2. Load the machine so the eye actually evolves. Any CPU burner works:
+1. [ScreenToGif](https://www.screentogif.com) — free, open source, Windows.
+2. Load the machine so the eye actually evolves on camera:
    `powershell -Command "1..8 | ForEach-Object { Start-Job { while($true){} } }"`
-   then `Get-Job | Remove-Job -Force` to stop.
-3. Record a small region around the tray icon, then use ScreenToGif's editor to
-   scale it up — or record with Windows Magnifier running at 4× or 8×.
-4. Five seconds is plenty: dormant, awakening under load, spinning at Mangekyou.
-5. Export as GIF under about 5MB so it plays inline on GitHub and Reddit.
+   and `powershell -Command "Get-Job | Remove-Job -Force"` to stop.
+3. Record a tight region around the icon, then scale it up in ScreenToGif's
+   editor — or record with Windows Magnifier docked at 4x.
+4. Keep it short. Dormant, awakening, then spinning at Mangekyou is the whole
+   story and it fits in five seconds.
+5. Export under about 5MB so it plays inline on GitHub and Reddit.

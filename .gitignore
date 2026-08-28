@@ -13,3 +13,6 @@ _*.log
 # Local backup snapshots - git history serves this purpose for the public repo.
 # The files stay on disk, they are just not published.
 *.bak
+
+# Source recordings live in the repo root; the published copies are in docs/
+/*.gif
