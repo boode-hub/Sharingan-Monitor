@@ -29,7 +29,7 @@ trust. One script you can read top to bottom.
 Nothing to compile and no installer. Never used GitHub before? Just follow along:
 
 <p align="center">
-  <img src="docs/Downlaod and Install.gif" alt="Downloading the ZIP from GitHub and running the script">
+  <img src="docs/download-install.gif" width="800" alt="Downloading the ZIP from GitHub and running the script">
 </p>
 
 1. Click the green **Code** button near the top of this page, then **Download ZIP**.
@@ -87,7 +87,7 @@ Exit
 Everything applies live. Settings persist to `settings.json` next to the script.
 
 <p align="center">
-  <img src="docs/Customize.gif" alt="Walking through the Customize menu: thresholds, colour, speed, shuffle and glow">
+  <img src="docs/customize.gif" width="420" alt="Walking through the Customize menu: thresholds, colour, speed, shuffle and glow">
   <br>
   <em>Every setting lives in the tray menu — no separate settings window.</em>
 </p>
