@@ -17,3 +17,7 @@ _*.log
 
 # User profiles (personal settings sets)
 profiles/
+
+# Eye artwork (third-party SVGs / pictures) - kept local, not published.
+# The app falls back to its built-in drawings when this folder is absent.
+eyes/

@@ -72,17 +72,22 @@ $global:rotationAngle = 0.0
 
 # All selectable Sharingan styles, in menu order. Also the pool the shuffle draws from.
 $global:SharinganStyles = @(
-    "Itachi", "Obito", "Kakashi", "Madara", "Izuna", "Sasuke", "Shisui",
-    "Indra", "Shin", "Sarada", "Naka", "Baru", "Rai", "Naori", "Fugaku",
-    "Nanashi", "Madara Eye 2", "Sasuke Eye 2"
+    "Itachi", "Kakashi/Obito", "Madara", "Madara Eye 2", "Izuna", "Sasuke", "Sasuke Eternal",
+    "Shisui", "Indra", "Shin", "Sarada", "Naka", "Baru", "Rai", "Naori", "Fugaku",
+    "Nanashi", "BOoD"
 )
+
+# Names used in settings files / profiles saved before the eye set was reworked.
+$global:StyleAliases = @{
+    "Obito" = "Kakashi/Obito"; "Kakashi" = "Kakashi/Obito"; "Sasuke Eye 2" = "Sasuke Eternal"
+}
 
 # Factory defaults. Reset restores exactly these.
 $global:Defaults = @{
     Thresholds     = @(15.0, 35.0, 55.0, 75.0)   # load % that unlocks tomoe 1, 2, 3, Mangekyou
-    ColorR         = 220
-    ColorG         = 10
-    ColorB         = 15
+    ColorR         = 195      # #c30000, the mid stop of the eyes' red gradient
+    ColorG         = 0
+    ColorB         = 0
     Glow           = $false
     SpeedLevel     = 50       # 1..100 slider; 50 = 1.0x (the original speed)
     Direction      = 1        # 1 clockwise, -1 counter-clockwise
@@ -94,7 +99,7 @@ $global:Defaults = @{
 
 # Live settings (populated by Reset-Defaults, then overwritten by the saved file if present)
 $global:thresholds = @(15.0, 35.0, 55.0, 75.0)
-$global:eyeColor = [System.Drawing.Color]::FromArgb(220, 10, 15)
+$global:eyeColor = [System.Drawing.Color]::FromArgb(195, 0, 0)
 $global:glowOn = $false
 $global:speedLevel = 50
 $global:speedMult = 1.0
@@ -144,6 +149,10 @@ function Set-SettingsFromObject($s) {
     if ((& $has 'ColorR') -and (& $has 'ColorG') -and (& $has 'ColorB')) {
         $c = { param($v) [Math]::Max(0, [Math]::Min(255, [int]$v)) }
         $global:eyeColor = [System.Drawing.Color]::FromArgb((& $c $s.ColorR), (& $c $s.ColorG), (& $c $s.ColorB))
+        # the old built-in default red now maps to the new default (the SVG red)
+        if ($global:eyeColor.R -eq 220 -and $global:eyeColor.G -eq 10 -and $global:eyeColor.B -eq 15) {
+            $global:eyeColor = [System.Drawing.Color]::FromArgb(195, 0, 0)
+        }
     }
     if (& $has 'Glow') { $global:glowOn = [bool]$s.Glow }
     if (& $has 'SpeedLevel') { Set-SpeedLevel ([int]$s.SpeedLevel) }
@@ -156,7 +165,11 @@ function Set-SettingsFromObject($s) {
     if (& $has 'Invert') { $global:invertOn = [bool]$s.Invert }
     if (& $has 'Shuffle') { $global:shuffleOn = [bool]$s.Shuffle }
     if (& $has 'ShuffleSeconds') { $global:shuffleSeconds = [Math]::Max(1, [int]$s.ShuffleSeconds) }
-    if ((& $has 'Style') -and ($global:SharinganStyles -contains $s.Style)) { $global:selectedEyeStyle = $s.Style }
+    if (& $has 'Style') {
+        $st = [string]$s.Style
+        if ($global:StyleAliases.ContainsKey($st)) { $st = $global:StyleAliases[$st] }
+        if ($global:SharinganStyles -contains $st) { $global:selectedEyeStyle = $st }
+    }
 }
 
 function Save-Settings {
@@ -335,7 +348,7 @@ function Sync-CustomMenu {
 }
 
 $global:ColorPresets = @(
-    @{ Text = "Sharingan Red"; Value = @(220, 10, 15) }
+    @{ Text = "Sharingan Red"; Value = @(195, 0, 0) }
     @{ Text = "Crimson";       Value = @(160, 0, 20) }
     @{ Text = "Orange";        Value = @(240, 110, 20) }
     @{ Text = "Gold";          Value = @(230, 180, 30) }
@@ -588,10 +601,366 @@ function Fill-CurvedBlade($g, $brush, $baseAngle, $startRadius, $length, $scale,
     }
 }
 
+# 4b. SVG eye engine (renders the files in .\eyes\ straight from their paths)
+# Minimal SVG -> GDI+ engine for the Mangekyou eye files.
+# Supports what those files use: circle, path (M L H V C S Z), g, use, transform
+# (matrix/rotate/translate/scale), solid fills/strokes and one radial gradient.
+$script:CI = [Globalization.CultureInfo]::InvariantCulture
+$script:XLINK = 'http://www.w3.org/1999/xlink'
+$script:SkipTags = @('defs','metadata','title','namedview','clipPath','radialGradient','linearGradient','rect')
+
+function Get-Num([string]$s) { [double]::Parse(($s.Trim() -replace 'px$', ''), $script:CI) }
+
+function ConvertTo-SvgColor([string]$v) {
+    if (-not $v) { return $null }
+    $v = $v.Trim().ToLower()
+    if ($v -eq 'none') { return $null }
+    if ($v -eq 'black') { return [Drawing.Color]::Black }
+    if ($v -eq 'white') { return [Drawing.Color]::White }
+    if ($v -match '^#([0-9a-f])([0-9a-f])([0-9a-f])$') {
+        return [Drawing.Color]::FromArgb([Convert]::ToInt32("$($Matches[1])$($Matches[1])", 16), [Convert]::ToInt32("$($Matches[2])$($Matches[2])", 16), [Convert]::ToInt32("$($Matches[3])$($Matches[3])", 16))
+    }
+    if ($v -match '^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$') {
+        return [Drawing.Color]::FromArgb([Convert]::ToInt32($Matches[1], 16), [Convert]::ToInt32($Matches[2], 16), [Convert]::ToInt32($Matches[3], 16))
+    }
+    return $null
+}
+
+function ConvertTo-SvgMatrix([string]$t) {
+    $m = New-Object Drawing.Drawing2D.Matrix
+    if (-not $t) { return $m }
+    foreach ($mt in [regex]::Matches($t, '(\w+)\s*\(([^)]*)\)')) {
+        $a = @([regex]::Split($mt.Groups[2].Value.Trim(), '[\s,]+') | Where-Object { $_ -ne '' } | ForEach-Object { [double]::Parse($_, $script:CI) })
+        $e = New-Object Drawing.Drawing2D.Matrix
+        switch ($mt.Groups[1].Value) {
+            'matrix' { $e = New-Object Drawing.Drawing2D.Matrix([single]$a[0], [single]$a[1], [single]$a[2], [single]$a[3], [single]$a[4], [single]$a[5]) }
+            'rotate' {
+                if ($a.Count -ge 3) { $e.RotateAt([single]$a[0], (New-Object Drawing.PointF([single]$a[1], [single]$a[2]))) }
+                else { $e.Rotate([single]$a[0]) }
+            }
+            'translate' { $ty = 0.0; if ($a.Count -gt 1) { $ty = $a[1] }; $e.Translate([single]$a[0], [single]$ty) }
+            'scale' { $sy = $a[0]; if ($a.Count -gt 1) { $sy = $a[1] }; $e.Scale([single]$a[0], [single]$sy) }
+        }
+        # list order "A B": B hits the points first, so each later one is prepended.
+        $m.Multiply($e, [Drawing.Drawing2D.MatrixOrder]::Prepend)
+    }
+    return $m
+}
+
+function ConvertTo-GdiPath([string]$d) {
+    $tk = [regex]::Matches($d, '[MmLlHhVvCcSsZz]|-?(?:\d+\.?\d*|\.\d+)(?:[eE][-+]?\d+)?')
+    $gp = New-Object Drawing.Drawing2D.GraphicsPath([Drawing.Drawing2D.FillMode]::Winding)
+    $i = 0; $n = $tk.Count
+    $cx = 0.0; $cy = 0.0; $sx = 0.0; $sy = 0.0; $cmd = ''
+    $c2x = 0.0; $c2y = 0.0; $prevCubic = $false; $needStart = $false
+    while ($i -lt $n) {
+        $s = $tk[$i].Value
+        if ($s -match '^[A-Za-z]$') { $cmd = $s; $i++ }
+        if ($cmd -ceq 'Z' -or $cmd -ceq 'z') {
+            $gp.CloseFigure(); $cx = $sx; $cy = $sy; $needStart = $true; $prevCubic = $false
+            if ($i -lt $n -and $tk[$i].Value -notmatch '^[A-Za-z]$') { $cmd = 'L' }  # stray numbers
+            continue
+        }
+        $rel = ($cmd -cmatch '[a-z]')
+        $up = $cmd.ToUpper()
+        $ox = 0.0; $oy = 0.0
+        if ($rel) { $ox = $cx; $oy = $cy }
+        if ($up -eq 'M') {
+            $x = $ox + [double]::Parse($tk[$i].Value, $script:CI); $y = $oy + [double]::Parse($tk[$i + 1].Value, $script:CI); $i += 2
+            $gp.StartFigure(); $cx = $x; $cy = $y; $sx = $x; $sy = $y; $needStart = $false; $prevCubic = $false
+            if ($rel) { $cmd = 'l' } else { $cmd = 'L' }
+        }
+        elseif ($up -eq 'L') {
+            $x = $ox + [double]::Parse($tk[$i].Value, $script:CI); $y = $oy + [double]::Parse($tk[$i + 1].Value, $script:CI); $i += 2
+            if ($needStart) { $gp.StartFigure(); $needStart = $false }
+            $gp.AddLine([single]$cx, [single]$cy, [single]$x, [single]$y); $cx = $x; $cy = $y; $prevCubic = $false
+        }
+        elseif ($up -eq 'H') {
+            $x = $ox + [double]::Parse($tk[$i].Value, $script:CI); $i++
+            if ($needStart) { $gp.StartFigure(); $needStart = $false }
+            $gp.AddLine([single]$cx, [single]$cy, [single]$x, [single]$cy); $cx = $x; $prevCubic = $false
+        }
+        elseif ($up -eq 'V') {
+            $y = $oy + [double]::Parse($tk[$i].Value, $script:CI); $i++
+            if ($needStart) { $gp.StartFigure(); $needStart = $false }
+            $gp.AddLine([single]$cx, [single]$cy, [single]$cx, [single]$y); $cy = $y; $prevCubic = $false
+        }
+        elseif ($up -eq 'C' -or $up -eq 'S') {
+            if ($up -eq 'C') {
+                $x1 = $ox + [double]::Parse($tk[$i].Value, $script:CI); $y1 = $oy + [double]::Parse($tk[$i + 1].Value, $script:CI); $i += 2
+            }
+            else {
+                if ($prevCubic) { $x1 = 2 * $cx - $c2x; $y1 = 2 * $cy - $c2y } else { $x1 = $cx; $y1 = $cy }
+            }
+            $x2 = $ox + [double]::Parse($tk[$i].Value, $script:CI); $y2 = $oy + [double]::Parse($tk[$i + 1].Value, $script:CI)
+            $x = $ox + [double]::Parse($tk[$i + 2].Value, $script:CI); $y = $oy + [double]::Parse($tk[$i + 3].Value, $script:CI); $i += 4
+            if ($needStart) { $gp.StartFigure(); $needStart = $false }
+            $gp.AddBezier([single]$cx, [single]$cy, [single]$x1, [single]$y1, [single]$x2, [single]$y2, [single]$x, [single]$y)
+            $c2x = $x2; $c2y = $y2; $cx = $x; $cy = $y; $prevCubic = $true
+        }
+        else { throw "Unsupported path command '$cmd'" }
+    }
+    return $gp
+}
+
+function Get-StyleMap($node, $inherit) {
+    $s = @{}
+    foreach ($k in $inherit.Keys) { $s[$k] = $inherit[$k] }
+    foreach ($a in 'fill', 'stroke', 'stroke-width') {
+        if ($node.HasAttribute($a)) { $s[$a] = $node.GetAttribute($a) }
+    }
+    if ($node.HasAttribute('style')) {
+        foreach ($pair in $node.GetAttribute('style').Split(';')) {
+            $kv = $pair.Split(':', 2)
+            if ($kv.Count -eq 2) { $s[$kv[0].Trim()] = $kv[1].Trim() }
+        }
+    }
+    return $s
+}
+
+function Get-GradientSpec($ids, [string]$ref) {
+    $id = $ref -replace '^url\(#', '' -replace '\)$', ''
+    $gn = $ids[$id]
+    if (-not $gn) { return $null }
+    $stops = @()
+    $pos = 0
+    foreach ($st in $gn.ChildNodes) {
+        if ($st.LocalName -ne 'stop') { continue }
+        $off = 0.0
+        if ($st.HasAttribute('offset')) { $off = Get-Num $st.GetAttribute('offset') }
+        $col = $null
+        if ($st.HasAttribute('stop-color')) { $col = ConvertTo-SvgColor $st.GetAttribute('stop-color') }
+        if ($st.HasAttribute('style')) {
+            foreach ($pair in $st.GetAttribute('style').Split(';')) {
+                $kv = $pair.Split(':', 2)
+                if ($kv.Count -eq 2 -and $kv[0].Trim() -eq 'stop-color') { $col = ConvertTo-SvgColor $kv[1] }
+            }
+        }
+        $stops += , @{ O = $off; C = $col }
+        $pos++
+    }
+    $spec = @{ Stops = $stops; User = ($gn.GetAttribute('gradientUnits') -eq 'userSpaceOnUse'); Cx = 0.5; Cy = 0.5; R = 0.5; M = (ConvertTo-SvgMatrix $gn.GetAttribute('gradientTransform')) }
+    if ($gn.HasAttribute('cx')) { $spec.Cx = Get-Num $gn.GetAttribute('cx') }
+    if ($gn.HasAttribute('cy')) { $spec.Cy = Get-Num $gn.GetAttribute('cy') }
+    if ($gn.HasAttribute('r')) { $spec.R = Get-Num $gn.GetAttribute('r') }
+    return $spec
+}
+
+function Add-SvgItems($node, $inh, $mat, $ids, $items) {
+    $tag = $node.LocalName
+    if ($script:SkipTags -contains $tag) { return }
+    $style = Get-StyleMap $node $inh
+    $m = $mat.Clone()
+    if ($node.HasAttribute('transform')) {
+        $m.Multiply((ConvertTo-SvgMatrix $node.GetAttribute('transform')), [Drawing.Drawing2D.MatrixOrder]::Prepend)
+    }
+    switch ($tag) {
+        'g' { foreach ($c in $node.ChildNodes) { if ($c.NodeType -eq 'Element') { Add-SvgItems $c $style $m $ids $items } }; return }
+        'use' {
+            $ref = $node.GetAttribute('href', $script:XLINK) -replace '^#', ''
+            if ($ids.ContainsKey($ref)) { Add-SvgItems $ids[$ref] $style $m $ids $items }
+            return
+        }
+        'svg' { foreach ($c in $node.ChildNodes) { if ($c.NodeType -eq 'Element') { Add-SvgItems $c $style $m $ids $items } }; return }
+        'circle' {
+            $cx = Get-Num $node.GetAttribute('cx'); $cy = Get-Num $node.GetAttribute('cy'); $r = Get-Num $node.GetAttribute('r')
+            $gp = New-Object Drawing.Drawing2D.GraphicsPath
+            $gp.AddEllipse([single]($cx - $r), [single]($cy - $r), [single]($r * 2), [single]($r * 2))
+        }
+        'path' { $gp = ConvertTo-GdiPath $node.GetAttribute('d') }
+        default { return }
+    }
+    $gp.Transform($m)
+    $el = $m.Elements
+    $scale = [Math]::Sqrt([Math]::Abs($el[0] * $el[3] - $el[1] * $el[2]))
+    $fillV = 'black'
+    if ($style.ContainsKey('fill')) { $fillV = $style['fill'] }
+    $item = @{ Path = $gp; Fill = $null; Grad = $null; Stroke = $null; Width = 0.0; Brush = $null }
+    if ($fillV -like 'url(*') {
+        $g = Get-GradientSpec $ids $fillV
+        if ($g) {
+            $b = $gp.GetBounds()
+            if ($g.User) {
+                $p = New-Object Drawing.PointF([single]$g.Cx, [single]$g.Cy)
+                $pr = New-Object Drawing.PointF([single]($g.Cx + $g.R), [single]$g.Cy)
+                $arr = [Drawing.PointF[]]@($p, $pr)
+                $g.M.TransformPoints($arr)
+                $item.GCx = $arr[0].X; $item.GCy = $arr[0].Y
+                $item.GR = [Math]::Abs($arr[1].X - $arr[0].X)
+            }
+            else {
+                $item.GCx = $b.X + $b.Width / 2; $item.GCy = $b.Y + $b.Height / 2; $item.GR = $b.Width / 2
+            }
+            $item.Grad = $g
+        }
+    }
+    else { $item.Fill = ConvertTo-SvgColor $fillV }
+    if ($style.ContainsKey('stroke')) { $item.Stroke = ConvertTo-SvgColor $style['stroke'] }
+    if ($item.Stroke) {
+        $w = 1.0
+        if ($style.ContainsKey('stroke-width')) { $w = Get-Num $style['stroke-width'] }
+        $item.Width = $w * $scale
+    }
+    $items.Add($item) | Out-Null
+}
+
+function Import-SvgEye([string]$file) {
+    $xml = New-Object Xml.XmlDocument
+    $xml.Load($file)
+    $ids = @{}
+    foreach ($n in $xml.SelectNodes('//*[@id]')) { $ids[$n.GetAttribute('id')] = $n }
+    $items = New-Object Collections.Generic.List[object]
+    Add-SvgItems $xml.DocumentElement @{} (New-Object Drawing.Drawing2D.Matrix) $ids $items
+    # The iris is the first gradient-filled shape; everything after it is the pattern.
+    $iris = $null; $pattern = New-Object Collections.Generic.List[object]
+    foreach ($it in $items) {
+        if (-not $iris -and $it.Grad) { $iris = $it } elseif ($iris) { $pattern.Add($it) | Out-Null }
+    }
+    if (-not $iris) { throw "No gradient iris found in $file" }
+    return @{ Iris = $iris; Pattern = $pattern; File = $file }
+}
+
+# Tint: SVG reds are all shades of #c30000. Map a colour to the user's eye
+# colour by brightness (R/195), so the default reproduces the artwork exactly
+# and any other colour is the same picture in that hue.
+function Get-ArtTint([System.Drawing.Color]$c, [System.Drawing.Color]$tint) {
+    $f = $c.R / 195.0
+    return [System.Drawing.Color]::FromArgb($c.A,
+        [int][Math]::Min(255, [Math]::Round($tint.R * $f)),
+        [int][Math]::Min(255, [Math]::Round($tint.G * $f)),
+        [int][Math]::Min(255, [Math]::Round($tint.B * $f)))
+}
+
+function Get-ArtGradientBrush($item, [System.Drawing.Color]$tint) {
+    $key = "$($tint.R),$($tint.G),$($tint.B)"
+    if ($item.Brush -and $item.BrushKey -eq $key) { return $item.Brush }
+    if ($item.Brush) { $item.Brush.Dispose() }
+    $r = $item.GR
+    $ep = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $ep.AddEllipse([single]($item.GCx - $r), [single]($item.GCy - $r), [single]($r * 2), [single]($r * 2))
+    $pb = New-Object System.Drawing.Drawing2D.PathGradientBrush($ep)
+    $stops = $item.Grad.Stops
+    $cb = New-Object System.Drawing.Drawing2D.ColorBlend($stops.Count)
+    $cols = New-Object 'System.Drawing.Color[]' $stops.Count
+    $pos = New-Object 'single[]' $stops.Count
+    for ($k = 0; $k -lt $stops.Count; $k++) {
+        $st = $stops[$stops.Count - 1 - $k]        # PathGradientBrush runs edge(0) -> centre(1)
+        $cols[$k] = Get-ArtTint $st.C $tint
+        $pos[$k] = [single](1.0 - $st.O)
+    }
+    $pos[0] = 0.0; $pos[$stops.Count - 1] = 1.0
+    $cb.Colors = $cols; $cb.Positions = $pos
+    $pb.InterpolationColors = $cb
+    $item.Brush = $pb; $item.BrushKey = $key
+    return $pb
+}
+
+$script:StdIris = $null
+# The red iris disc shared by every eye: r=145 plus a 10-wide black rim.
+function Write-StdIris($g, [System.Drawing.Color]$tint) {
+    if (-not $script:StdIris) {
+        $gp = New-Object System.Drawing.Drawing2D.GraphicsPath
+        $gp.AddEllipse(5, 5, 290, 290)
+        $script:StdIris = @{
+            Path = $gp; GCx = 150.0; GCy = 150.0; GR = 145.0; Brush = $null; BrushKey = $null
+            Grad = @{ Stops = @(
+                    @{ O = 0.0; C = [System.Drawing.Color]::FromArgb(102, 0, 0) },
+                    @{ O = 0.5; C = [System.Drawing.Color]::FromArgb(195, 0, 0) },
+                    @{ O = 1.0; C = [System.Drawing.Color]::FromArgb(160, 0, 0) }) }
+        }
+    }
+    $it = $script:StdIris
+    $eb = New-Object System.Drawing.SolidBrush((Get-ArtTint ([System.Drawing.Color]::FromArgb(160, 0, 0)) $tint))
+    $g.FillPath($eb, $it.Path); $eb.Dispose()                  # no hairline gap at the rim
+    $g.FillPath((Get-ArtGradientBrush $it $tint), $it.Path)
+    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Black, 10.0)
+    $g.DrawPath($pen, $it.Path); $pen.Dispose()
+}
+
+# Draw an eye's pattern items (already in 300x300 SVG space).
+function Write-ArtPattern($g, $art, [System.Drawing.Color]$tint) {
+    if ($art.Raster) {
+        # Pictures: use the red channel as brightness, shift it toward the eye
+        # colour. At the default colour this is the identity, so the picture is exact.
+        $key = "$($tint.R),$($tint.G),$($tint.B)"
+        if ($art.AttrKey -ne $key) {
+            if ($art.Attr) { $art.Attr.Dispose() }
+            $cm = New-Object System.Drawing.Imaging.ColorMatrix
+            $cm.Matrix00 = $tint.R / 195.0; $cm.Matrix01 = $tint.G / 195.0; $cm.Matrix02 = $tint.B / 195.0
+            $cm.Matrix11 = 1.0; $cm.Matrix22 = 1.0; $cm.Matrix33 = 1.0; $cm.Matrix44 = 1.0
+            $ia = New-Object System.Drawing.Imaging.ImageAttributes
+            $ia.SetColorMatrix($cm)
+            $art.Attr = $ia; $art.AttrKey = $key
+        }
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+        $w = $art.Raster.Width; $h = $art.Raster.Height
+        $g.DrawImage($art.Raster, (New-Object System.Drawing.Rectangle(0, 0, 300, 300)), 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel, $art.Attr)
+        return
+    }
+    foreach ($it in $art.Pattern) {
+        if ($it.Fill) {
+            $br = New-Object System.Drawing.SolidBrush((Get-ArtTint $it.Fill $tint))
+            $g.FillPath($br, $it.Path); $br.Dispose()
+        }
+        elseif ($it.Grad) {
+            $g.FillPath((Get-ArtGradientBrush $it $tint), $it.Path)
+        }
+        if ($it.Stroke -and $it.Width -gt 0) {
+            $pen = New-Object System.Drawing.Pen((Get-ArtTint $it.Stroke $tint), [single]$it.Width)
+            $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Miter; $pen.MiterLimit = 4
+            $g.DrawPath($pen, $it.Path); $pen.Dispose()
+        }
+    }
+}
+
+function Import-RasterEye([string]$path) {
+    $raw = New-Object System.Drawing.Bitmap($path)
+    $bmp = New-Object System.Drawing.Bitmap($raw)              # detach: do not keep the file locked
+    $raw.Dispose()
+    return @{ Raster = $bmp; Pattern = $null; Attr = $null; AttrKey = $null }
+}
+
+# 4c. Eye artwork: .\eyes\ holds the original SVG/PNG for each eye.
+$global:EyesDir = Join-Path $PSScriptRoot "eyes"
+$global:EyeFiles = @{
+    "Itachi" = "Itachi.svg"; "Kakashi/Obito" = "Kakashi-Obito.svg"; "Madara" = "Madara.svg"
+    "Madara Eye 2" = "Madara-Eternal.svg"; "Izuna" = "Izuna.svg"; "Sasuke" = "Sasuke.svg"
+    "Sasuke Eternal" = "Sasuke-Eternal.png"; "Shisui" = "Shisui.svg"; "Indra" = "Indra.svg"
+    "Shin" = "Shin.svg"; "Sarada" = "Sarada.svg"; "Naka" = "Naka.svg"; "Baru" = "Baru.svg"
+    "Rai" = "Rai.svg"; "Naori" = "Naori.svg"; "Fugaku" = "Fugaku.svg"; "Nanashi" = "Nanashi.svg"
+    "BOoD" = "BOoD.png"
+}
+# Without the eyes\ folder these fall back to the built-in drawings below.
+$global:ArtFallback = @{ "Kakashi/Obito" = "Kakashi"; "Sasuke Eternal" = "Sasuke Eye 2"; "BOoD" = "Itachi" }
+$script:EyeArtCache = @{}
+
+# Loaded on first use and cached; $null when the file is missing or unreadable.
+function Get-EyeArt([string]$style) {
+    if ($script:EyeArtCache.ContainsKey($style)) { return $script:EyeArtCache[$style] }
+    $art = $null
+    $file = $global:EyeFiles[$style]
+    if ($file) {
+        $path = Join-Path $global:EyesDir $file
+        try {
+            if (Test-Path $path) {
+                if ($path -like '*.png') { $art = Import-RasterEye $path } else { $art = Import-SvgEye $path }
+            }
+        }
+        catch { $art = $null }
+    }
+    $script:EyeArtCache[$style] = $art
+    return $art
+}
+
 # 5. Sharingan Drawing Routine (128x128 High Resolution)
 # E: Current morph stage (0.0 to 4.0)
 # Angle: Rotation angle in radians
 function Get-SharinganIcon($E, $Angle, $Style) {
+    # Eyes with artwork in .\eyes\ are drawn from it; without it, fall back to the
+    # older built-in drawing for that eye.
+    $art = Get-EyeArt $Style
+    if ($null -eq $art -and $global:ArtFallback.ContainsKey($Style)) { $Style = $global:ArtFallback[$Style] }
+
     # 128x128 pixel double-resolution canvas
     $bmp = New-Object System.Drawing.Bitmap(128, 128)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
@@ -632,8 +1001,18 @@ function Get-SharinganIcon($E, $Angle, $Style) {
     }
 
     # A. Draw Sclera (Base Eye Background)
-    $g.FillEllipse($redBrush, 6, 6, 116, 116)
-    $g.DrawEllipse($borderPen, 6, 6, 116, 116)
+    if ($art) {
+        $artState = $g.Save()
+        $g.TranslateTransform(64.0, 64.0)
+        $g.ScaleTransform(0.401, 0.401)              # 300-unit artwork -> 128px canvas
+        $g.TranslateTransform(-150.0, -150.0)
+        Write-StdIris $g $eyeDraw
+        $g.Restore($artState)
+    }
+    else {
+        $g.FillEllipse($redBrush, 6, 6, 116, 116)
+        $g.DrawEllipse($borderPen, 6, 6, 116, 116)
+    }
 
     # B. Draw Inner Ring (Fades in for tomoes, fades out for Mangekyou)
     $ringAlpha = 0
@@ -685,6 +1064,8 @@ function Get-SharinganIcon($E, $Angle, $Style) {
             $pupilRadius = 13.0 + (1.0 * $mScale)
         }
     }
+    # With artwork the design supplies its own centre, so the base pupil hands over to it.
+    if ($art) { $pupilRadius = 14.0 * (1.0 - [Math]::Max(0.0, [Math]::Min(1.0, $E - 3.0))) }
     $g.FillEllipse($blackBrush, [float](64.0 - $pupilRadius), [float](64.0 - $pupilRadius), [float]($pupilRadius * 2), [float]($pupilRadius * 2))
 
     # D. Draw Style-specific Evolution Effects (Stage >= 3.0)
@@ -693,7 +1074,19 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $mScale = $E - 3.0
     }
     
-    if ($mScale -gt 0.0) {
+    if ($art) {
+        if ($mScale -gt 0.0) {
+            $artState = $g.Save()
+            $g.TranslateTransform(64.0, 64.0)
+            $g.RotateTransform([float]($Angle * 180.0 / [Math]::PI))
+            $s = 0.401 * $mScale
+            $g.ScaleTransform([float]$s, [float]$s)
+            $g.TranslateTransform(-150.0, -150.0)
+            Write-ArtPattern $g $art $eyeDraw
+            $g.Restore($artState)
+        }
+    }
+    elseif ($mScale -gt 0.0) {
         if ($Style -eq "Itachi") {
             for ($i = 0; $i -lt 3; $i++) {
                 $baseAngle = $Angle + ($i * 2 * [Math]::PI / 3)
