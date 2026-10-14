@@ -84,7 +84,9 @@ $global:Defaults = @{
     ColorG         = 10
     ColorB         = 15
     Glow           = $false
-    Speed          = 1.0
+    SpeedLevel     = 50       # 1..100 slider; 50 = 1.0x (the original speed)
+    Direction      = 1        # 1 clockwise, -1 counter-clockwise
+    Invert         = $false   # swap tomoe/pattern colour with the eye colour
     Shuffle        = $false
     ShuffleSeconds = 10
     Style          = "Itachi"
@@ -94,26 +96,72 @@ $global:Defaults = @{
 $global:thresholds = @(15.0, 35.0, 55.0, 75.0)
 $global:eyeColor = [System.Drawing.Color]::FromArgb(220, 10, 15)
 $global:glowOn = $false
+$global:speedLevel = 50
 $global:speedMult = 1.0
+$global:rotationDir = 1
+$global:invertOn = $false
 $global:shuffleOn = $false
 $global:shuffleSeconds = 10
 
 $global:SettingsPath = Join-Path $PSScriptRoot "settings.json"
 
+# Slider 1..100 -> rotation multiplier. Exponential so each notch feels the same:
+# 1 = 0.17x, 50 = 1.00x (original speed), 100 = 6.00x.
+function Get-SpeedMult([int]$level) { return [Math]::Pow(6.0, ($level - 50) / 50.0) }
+
+function Set-SpeedLevel([int]$level) {
+    $global:speedLevel = [Math]::Max(1, [Math]::Min(100, $level))
+    $global:speedMult = Get-SpeedMult $global:speedLevel
+}
+
 # 2b. Settings Persistence
+$global:ProfilesDir = Join-Path $PSScriptRoot "profiles"
+
+function Get-SettingsObject {
+    [PSCustomObject]@{
+        Thresholds     = $global:thresholds
+        ColorR         = $global:eyeColor.R
+        ColorG         = $global:eyeColor.G
+        ColorB         = $global:eyeColor.B
+        Glow           = $global:glowOn
+        SpeedLevel     = $global:speedLevel
+        Direction      = $global:rotationDir
+        Invert         = $global:invertOn
+        Shuffle        = $global:shuffleOn
+        ShuffleSeconds = $global:shuffleSeconds
+        Style          = $global:selectedEyeStyle
+    }
+}
+
+# Apply a settings object (from settings.json or a profile). Every field is
+# optional and validated, so older files and hand-edited profiles still load.
+function Set-SettingsFromObject($s) {
+    $has = { param($n) $null -ne $s.PSObject.Properties[$n] }
+    if ((& $has 'Thresholds') -and @($s.Thresholds).Count -eq 4) {
+        $t = @($s.Thresholds | ForEach-Object { [double]$_ })
+        if ($t[0] -ge 0 -and $t[3] -le 100 -and $t[0] -lt $t[1] -and $t[1] -lt $t[2] -and $t[2] -lt $t[3]) { $global:thresholds = $t }
+    }
+    if ((& $has 'ColorR') -and (& $has 'ColorG') -and (& $has 'ColorB')) {
+        $c = { param($v) [Math]::Max(0, [Math]::Min(255, [int]$v)) }
+        $global:eyeColor = [System.Drawing.Color]::FromArgb((& $c $s.ColorR), (& $c $s.ColorG), (& $c $s.ColorB))
+    }
+    if (& $has 'Glow') { $global:glowOn = [bool]$s.Glow }
+    if (& $has 'SpeedLevel') { Set-SpeedLevel ([int]$s.SpeedLevel) }
+    elseif (& $has 'Speed') {
+        # settings.json written before the slider existed stored a multiplier
+        $m = [Math]::Max(0.05, [double]$s.Speed)
+        Set-SpeedLevel ([int][Math]::Round(50 + 50 * [Math]::Log($m) / [Math]::Log(6.0)))
+    }
+    if (& $has 'Direction') { if ([int]$s.Direction -lt 0) { $global:rotationDir = -1 } else { $global:rotationDir = 1 } }
+    if (& $has 'Invert') { $global:invertOn = [bool]$s.Invert }
+    if (& $has 'Shuffle') { $global:shuffleOn = [bool]$s.Shuffle }
+    if (& $has 'ShuffleSeconds') { $global:shuffleSeconds = [Math]::Max(1, [int]$s.ShuffleSeconds) }
+    if ((& $has 'Style') -and ($global:SharinganStyles -contains $s.Style)) { $global:selectedEyeStyle = $s.Style }
+}
+
 function Save-Settings {
     try {
-        [PSCustomObject]@{
-            Thresholds     = $global:thresholds
-            ColorR         = $global:eyeColor.R
-            ColorG         = $global:eyeColor.G
-            ColorB         = $global:eyeColor.B
-            Glow           = $global:glowOn
-            Speed          = $global:speedMult
-            Shuffle        = $global:shuffleOn
-            ShuffleSeconds = $global:shuffleSeconds
-            Style          = $global:selectedEyeStyle
-        } | ConvertTo-Json | Set-Content -Path $global:SettingsPath -Encoding UTF8
+        Get-SettingsObject | ConvertTo-Json | Set-Content -Path $global:SettingsPath -Encoding UTF8
     }
     catch {
         # A read-only folder should never take the tray icon down with it.
@@ -123,20 +171,34 @@ function Save-Settings {
 function Load-Settings {
     if (-not (Test-Path $global:SettingsPath)) { return }
     try {
-        $s = Get-Content -Path $global:SettingsPath -Raw | ConvertFrom-Json
-        if ($s.Thresholds -and $s.Thresholds.Count -eq 4) {
-            $global:thresholds = @($s.Thresholds | ForEach-Object { [double]$_ })
-        }
-        $global:eyeColor = [System.Drawing.Color]::FromArgb([int]$s.ColorR, [int]$s.ColorG, [int]$s.ColorB)
-        $global:glowOn = [bool]$s.Glow
-        $global:speedMult = [double]$s.Speed
-        $global:shuffleOn = [bool]$s.Shuffle
-        $global:shuffleSeconds = [int]$s.ShuffleSeconds
-        if ($global:SharinganStyles -contains $s.Style) { $global:selectedEyeStyle = $s.Style }
+        Set-SettingsFromObject (Get-Content -Path $global:SettingsPath -Raw | ConvertFrom-Json)
     }
     catch {
         # Corrupt file: fall back to whatever defaults are already loaded.
     }
+}
+
+# Profiles: one compact single-line JSON file per profile in .\profiles\
+function Get-ProfileFileName([string]$name) {
+    $clean = ($name.Trim() -replace '[\\/:*?"<>|]', '').Trim()
+    if (-not $clean) { return $null }
+    return (Join-Path $global:ProfilesDir ($clean + ".json"))
+}
+
+function Save-Profile([string]$name) {
+    $path = Get-ProfileFileName $name
+    if (-not $path) { return $null }
+    if (-not (Test-Path $global:ProfilesDir)) { New-Item -ItemType Directory -Path $global:ProfilesDir | Out-Null }
+    Get-SettingsObject | ConvertTo-Json -Compress | Set-Content -Path $path -Encoding UTF8
+    return $path
+}
+
+function Import-Profile([string]$path) {
+    try {
+        Set-SettingsFromObject (Get-Content -Path $path -Raw | ConvertFrom-Json)
+        return $true
+    }
+    catch { return $false }
 }
 
 function Reset-Defaults {
@@ -144,7 +206,9 @@ function Reset-Defaults {
     $global:thresholds = @($d.Thresholds)
     $global:eyeColor = [System.Drawing.Color]::FromArgb($d.ColorR, $d.ColorG, $d.ColorB)
     $global:glowOn = $d.Glow
-    $global:speedMult = $d.Speed
+    Set-SpeedLevel $d.SpeedLevel
+    $global:rotationDir = $d.Direction
+    $global:invertOn = $d.Invert
     $global:shuffleOn = $d.Shuffle
     $global:shuffleSeconds = $d.ShuffleSeconds
     Set-EyeStyle $d.Style
@@ -259,7 +323,14 @@ function Sync-CustomMenu {
         }
     }
     $global:GlowItem.Checked = $global:glowOn
+    $global:InvertItem.Checked = $global:invertOn
     $global:ShuffleToggle.Checked = $global:shuffleOn
+    if ($global:SpeedTrack -and $global:SpeedTrack.Value -ne $global:speedLevel) {
+        $global:SyncingSpeed = $true
+        $global:SpeedTrack.Value = $global:speedLevel
+        $global:SyncingSpeed = $false
+    }
+    if ($global:SpeedLabel) { $global:SpeedLabel.Text = ("Speed {0}   ({1:N2}x)" -f $global:speedLevel, $global:speedMult) }
     $global:ColorSwatchItem.Text = "Current: $(Get-ColorName $global:eyeColor)"
 }
 
@@ -353,13 +424,59 @@ $PickColorItem.add_Click({
 $ColorItem.DropDownItems.Add($PickColorItem) | Out-Null
 
 # --- Speed ---------------------------------------------------------------
-$speedChoices = @(0.2, 0.4, 0.6, 0.8, 1.0, 1.25, 1.5, 2.0, 2.5, 3.0 |
-    ForEach-Object { @{ Text = ("{0:N2}x" -f $_); Value = [double]$_ } })
+# A real slider (1..100) hosted inside the menu. The label shows the level and
+# the resulting multiplier; the value is saved when the mouse/key is released.
 $SpeedItem = New-Object System.Windows.Forms.ToolStripMenuItem("Speed")
 $CustomItem.DropDownItems.Add($SpeedItem) | Out-Null
-Fill-ChoiceMenu $SpeedItem $speedChoices `
-{ $global:speedMult } `
-{ param($v) $global:speedMult = [double]$v } | Out-Null
+
+$speedPanel = New-Object System.Windows.Forms.Panel
+$speedPanel.Size = New-Object System.Drawing.Size(250, 62)
+$global:SpeedLabel = New-Object System.Windows.Forms.Label
+$global:SpeedLabel.SetBounds(10, 6, 230, 18)
+$global:SpeedLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+$global:SpeedTrack = New-Object System.Windows.Forms.TrackBar
+$global:SpeedTrack.SetBounds(4, 26, 242, 32)
+$global:SpeedTrack.Minimum = 1
+$global:SpeedTrack.Maximum = 100
+$global:SpeedTrack.TickFrequency = 10
+$global:SpeedTrack.LargeChange = 10
+$global:SpeedTrack.SmallChange = 1
+$global:SpeedTrack.Value = $global:speedLevel
+$global:SyncingSpeed = $false
+$global:SpeedTrack.add_ValueChanged({
+        if ($global:SyncingSpeed) { return }
+        Set-SpeedLevel $global:SpeedTrack.Value
+        $global:SpeedLabel.Text = ("Speed {0}   ({1:N2}x)" -f $global:speedLevel, $global:speedMult)
+    })
+$global:SpeedTrack.add_MouseUp({ Save-Settings })
+$global:SpeedTrack.add_KeyUp({ Save-Settings })
+$speedPanel.Controls.Add($global:SpeedLabel)
+$speedPanel.Controls.Add($global:SpeedTrack)
+$speedHost = New-Object System.Windows.Forms.ToolStripControlHost($speedPanel)
+$speedHost.AutoSize = $false
+$speedHost.Size = $speedPanel.Size
+$SpeedItem.DropDownItems.Add($speedHost) | Out-Null
+
+# --- Direction -----------------------------------------------------------
+$DirectionItem = New-Object System.Windows.Forms.ToolStripMenuItem("Direction")
+$CustomItem.DropDownItems.Add($DirectionItem) | Out-Null
+Fill-ChoiceMenu $DirectionItem @(
+    @{ Text = "Clockwise"; Value = 1 }
+    @{ Text = "Counter-clockwise"; Value = -1 }
+) `
+{ $global:rotationDir } `
+{ param($v) $global:rotationDir = [int]$v } | Out-Null
+
+# --- Invert ----------------------------------------------------------------
+# Swaps the tomoe/pattern colour with the eye colour: a dark eye with
+# coloured tomoe instead of a coloured eye with dark tomoe.
+$global:InvertItem = New-Object System.Windows.Forms.ToolStripMenuItem("Invert Colors")
+$global:InvertItem.add_Click({
+        $global:invertOn = -not $global:invertOn
+        Save-Settings
+        Sync-CustomMenu
+    })
+$CustomItem.DropDownItems.Add($global:InvertItem) | Out-Null
 
 # --- Shuffle -------------------------------------------------------------
 $ShuffleItem = New-Object System.Windows.Forms.ToolStripMenuItem("Shuffle")
@@ -396,6 +513,48 @@ $global:GlowItem.add_Click({
         Sync-CustomMenu
     })
 $CustomItem.DropDownItems.Add($global:GlowItem) | Out-Null
+
+# --- Profiles ------------------------------------------------------------
+# A profile is the whole settings set in one small JSON file under .\profiles\.
+# The list is rebuilt each time the submenu opens, so files dropped in by hand show up.
+$ProfilesItem = New-Object System.Windows.Forms.ToolStripMenuItem("Profiles")
+$CustomItem.DropDownItems.Add($ProfilesItem) | Out-Null
+
+function Build-ProfilesMenu {
+    $ProfilesItem.DropDownItems.Clear()
+    $save = New-Object System.Windows.Forms.ToolStripMenuItem("Save current settings as...")
+    $save.add_Click({
+            try {
+                Add-Type -AssemblyName Microsoft.VisualBasic
+                $name = [Microsoft.VisualBasic.Interaction]::InputBox("Name for this profile:", "Save profile", "My profile")
+            }
+            catch { $name = "Profile " + (Get-Date -Format "yyyy-MM-dd HH-mm-ss") }
+            if ($name -and $name.Trim()) { Save-Profile $name | Out-Null }
+        })
+    $ProfilesItem.DropDownItems.Add($save) | Out-Null
+    $files = @()
+    if (Test-Path $global:ProfilesDir) { $files = @(Get-ChildItem -Path $global:ProfilesDir -Filter *.json | Sort-Object Name) }
+    if ($files.Count -gt 0) {
+        $ProfilesItem.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+        foreach ($f in $files) {
+            $mi = New-Object System.Windows.Forms.ToolStripMenuItem($f.BaseName)
+            $mi.Tag = $f.FullName
+            $mi.add_Click({
+                    if (Import-Profile $this.Tag) { Set-EyeStyle $global:selectedEyeStyle; Save-Settings; Sync-CustomMenu }
+                })
+            $ProfilesItem.DropDownItems.Add($mi) | Out-Null
+        }
+    }
+    $ProfilesItem.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+    $open = New-Object System.Windows.Forms.ToolStripMenuItem("Open profiles folder")
+    $open.add_Click({
+            if (-not (Test-Path $global:ProfilesDir)) { New-Item -ItemType Directory -Path $global:ProfilesDir | Out-Null }
+            Start-Process explorer.exe $global:ProfilesDir
+        })
+    $ProfilesItem.DropDownItems.Add($open) | Out-Null
+}
+$ProfilesItem.add_DropDownOpening({ Build-ProfilesMenu })
+Build-ProfilesMenu
 
 # --- Reset ---------------------------------------------------------------
 $CustomItem.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
@@ -870,6 +1029,22 @@ function Get-SharinganIcon($E, $Angle, $Style) {
     $borderPen.Dispose()
     $g.Dispose()
 
+    # Invert: black becomes the eye colour and the eye colour becomes black.
+    # Every pixel is a blend of the two, so new = eyeColour - old, per channel.
+    if ($global:invertOn) {
+        $cm = New-Object System.Drawing.Imaging.ColorMatrix
+        $cm.Matrix00 = -1.0; $cm.Matrix11 = -1.0; $cm.Matrix22 = -1.0; $cm.Matrix33 = 1.0; $cm.Matrix44 = 1.0
+        $cm.Matrix40 = $eyeDraw.R / 255.0; $cm.Matrix41 = $eyeDraw.G / 255.0; $cm.Matrix42 = $eyeDraw.B / 255.0
+        $ia = New-Object System.Drawing.Imaging.ImageAttributes
+        $ia.SetColorMatrix($cm)
+        $inv = New-Object System.Drawing.Bitmap(128, 128)
+        $ig = [System.Drawing.Graphics]::FromImage($inv)
+        $ig.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
+        $ig.DrawImage($bmp, (New-Object System.Drawing.Rectangle(0, 0, 128, 128)), 0, 0, 128, 128, [System.Drawing.GraphicsUnit]::Pixel, $ia)
+        $ig.Dispose(); $ia.Dispose(); $bmp.Dispose()
+        $bmp = $inv
+    }
+
     # Convert Bitmap to Handle
     $hIcon = $bmp.GetHicon()
     $icon = [System.Drawing.Icon]::FromHandle($hIcon)
@@ -940,11 +1115,14 @@ $RenderFrame = {
     if ($global:currentLoadPercent -ge $global:thresholds[0]) {
         $speedFactor = 0.02 + ($global:currentLoadPercent / 100.0) * 0.26
     }
-    $speedFactor *= $global:speedMult
+    $speedFactor *= $global:speedMult * $global:rotationDir
 
     $global:rotationAngle += $speedFactor
     if ($global:rotationAngle -ge (2 * [Math]::PI)) {
         $global:rotationAngle -= (2 * [Math]::PI)
+    }
+    elseif ($global:rotationAngle -lt 0) {
+        $global:rotationAngle += (2 * [Math]::PI)
     }
 
     # Create next icon frame

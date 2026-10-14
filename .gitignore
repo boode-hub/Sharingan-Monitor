@@ -14,3 +14,6 @@ _*.ps1
 _*.png
 _*.log
 *.bak
+
+# User profiles (personal settings sets)
+profiles/
