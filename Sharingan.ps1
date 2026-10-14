@@ -82,6 +82,14 @@ $global:StyleAliases = @{
     "Obito" = "Kakashi/Obito"; "Kakashi" = "Kakashi/Obito"; "Sasuke Eye 2" = "Sasuke Eternal"
 }
 
+# BOoD exists only as artwork. Without the eyes\ folder it would be a copy of
+# another eye, so it is left out of the list instead.
+foreach ($artOnly in @("BOoD")) {
+    if (-not (Test-Path (Join-Path $PSScriptRoot "eyes\$artOnly.png"))) {
+        $global:SharinganStyles = @($global:SharinganStyles | Where-Object { $_ -ne $artOnly })
+    }
+}
+
 # Factory defaults. Reset restores exactly these.
 $global:Defaults = @{
     Thresholds     = @(15.0, 35.0, 55.0, 75.0)   # load % that unlocks tomoe 1, 2, 3, Mangekyou
@@ -878,16 +886,17 @@ function Write-StdIris($g, [System.Drawing.Color]$tint) {
 }
 
 # Draw an eye's pattern items (already in 300x300 SVG space).
-function Write-ArtPattern($g, $art, [System.Drawing.Color]$tint) {
+function Write-ArtPattern($g, $art, [System.Drawing.Color]$tint, [double]$alpha = 1.0) {
+    $a255 = [int][Math]::Round(255.0 * [Math]::Max(0.0, [Math]::Min(1.0, $alpha)))
     if ($art.Raster) {
         # Pictures: use the red channel as brightness, shift it toward the eye
         # colour. At the default colour this is the identity, so the picture is exact.
-        $key = "$($tint.R),$($tint.G),$($tint.B)"
+        $key = "$($tint.R),$($tint.G),$($tint.B),$a255"
         if ($art.AttrKey -ne $key) {
             if ($art.Attr) { $art.Attr.Dispose() }
             $cm = New-Object System.Drawing.Imaging.ColorMatrix
             $cm.Matrix00 = $tint.R / 195.0; $cm.Matrix01 = $tint.G / 195.0; $cm.Matrix02 = $tint.B / 195.0
-            $cm.Matrix11 = 1.0; $cm.Matrix22 = 1.0; $cm.Matrix33 = 1.0; $cm.Matrix44 = 1.0
+            $cm.Matrix11 = 1.0; $cm.Matrix22 = 1.0; $cm.Matrix33 = $a255 / 255.0; $cm.Matrix44 = 1.0
             $ia = New-Object System.Drawing.Imaging.ImageAttributes
             $ia.SetColorMatrix($cm)
             $art.Attr = $ia; $art.AttrKey = $key
@@ -899,14 +908,14 @@ function Write-ArtPattern($g, $art, [System.Drawing.Color]$tint) {
     }
     foreach ($it in $art.Pattern) {
         if ($it.Fill) {
-            $br = New-Object System.Drawing.SolidBrush((Get-ArtTint $it.Fill $tint))
+            $br = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($a255, (Get-ArtTint $it.Fill $tint)))
             $g.FillPath($br, $it.Path); $br.Dispose()
         }
         elseif ($it.Grad) {
             $g.FillPath((Get-ArtGradientBrush $it $tint), $it.Path)
         }
         if ($it.Stroke -and $it.Width -gt 0) {
-            $pen = New-Object System.Drawing.Pen((Get-ArtTint $it.Stroke $tint), [single]$it.Width)
+            $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($a255, (Get-ArtTint $it.Stroke $tint)), [single]$it.Width)
             $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Miter; $pen.MiterLimit = 4
             $g.DrawPath($pen, $it.Path); $pen.Dispose()
         }
@@ -960,6 +969,20 @@ function Get-SharinganIcon($E, $Angle, $Style) {
     # older built-in drawing for that eye.
     $art = Get-EyeArt $Style
     if ($null -eq $art -and $global:ArtFallback.ContainsKey($Style)) { $Style = $global:ArtFallback[$Style] }
+
+    # Merge phase (E 3 -> 4): the three tomoe spiral inward, in the rotation
+    # direction, and merge into the Mangekyou, which blooms out of where they met.
+    #   $conv  how far the tomoe have converged / swirled   (0..1, eased)
+    #   $fade  1 -> 0 as the tomoe dissolve into the pattern (late in the merge)
+    #   $bloom how far the pattern has formed                (0..1, eased)
+    $mu = [Math]::Max(0.0, [Math]::Min(1.0, $E - 3.0))
+    $conv = $mu * $mu * (3.0 - 2.0 * $mu)
+    $fu = [Math]::Max(0.0, [Math]::Min(1.0, ($mu - 0.55) / 0.45))
+    $fade = 1.0 - ($fu * $fu * (3.0 - 2.0 * $fu))
+    $bu = [Math]::Max(0.0, [Math]::Min(1.0, ($mu - 0.30) / 0.70))
+    $bloom = $bu * $bu * (3.0 - 2.0 * $bu)
+    $spinDir = 1.0
+    if ($global:rotationDir -lt 0) { $spinDir = -1.0 }
 
     # 128x128 pixel double-resolution canvas
     $bmp = New-Object System.Drawing.Bitmap(128, 128)
@@ -1065,7 +1088,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         }
     }
     # With artwork the design supplies its own centre, so the base pupil hands over to it.
-    if ($art) { $pupilRadius = 14.0 * (1.0 - [Math]::Max(0.0, [Math]::Min(1.0, $E - 3.0))) }
+    if ($art) { $pupilRadius = 14.0 * (1.0 - $bloom) }
     $g.FillEllipse($blackBrush, [float](64.0 - $pupilRadius), [float](64.0 - $pupilRadius), [float]($pupilRadius * 2), [float]($pupilRadius * 2))
 
     # D. Draw Style-specific Evolution Effects (Stage >= 3.0)
@@ -1075,14 +1098,16 @@ function Get-SharinganIcon($E, $Angle, $Style) {
     }
     
     if ($art) {
-        if ($mScale -gt 0.0) {
+        if ($bloom -gt 0.0) {
             $artState = $g.Save()
             $g.TranslateTransform(64.0, 64.0)
-            $g.RotateTransform([float]($Angle * 180.0 / [Math]::PI))
-            $s = 0.401 * $mScale
+            # starts 120 degrees behind and catches up in the spin direction as it forms
+            $unwind = -$spinDir * (1.0 - $bloom) * 120.0
+            $g.RotateTransform([float]($Angle * 180.0 / [Math]::PI + $unwind))
+            $s = 0.401 * (0.25 + 0.75 * $bloom)
             $g.ScaleTransform([float]$s, [float]$s)
             $g.TranslateTransform(-150.0, -150.0)
-            Write-ArtPattern $g $art $eyeDraw
+            Write-ArtPattern $g $art $eyeDraw $bloom
             $g.Restore($artState)
         }
     }
@@ -1356,7 +1381,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $t1_scale = 1.0
     }
     else {
-        $t1_scale = 4.0 - $E
+        $t1_scale = $fade
     }
 
     $t2_angle = [Math]::PI
@@ -1370,7 +1395,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $t2_angle = [Math]::PI - $interp * ([Math]::PI - (2 * [Math]::PI / 3))
     }
     elseif ($E -ge 3.0) {
-        $t2_scale = 4.0 - $E
+        $t2_scale = $fade
         $t2_angle = 2 * [Math]::PI / 3
     }
 
@@ -1380,7 +1405,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $t3_scale = $E - 2.0
     }
     elseif ($E -gt 3.0) {
-        $t3_scale = 4.0 - $E
+        $t3_scale = $fade
     }
 
     $tomoes = @(
@@ -1393,8 +1418,9 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $scale = $tomoe.Scale
         if ($scale -le 0.01) { continue }
 
-        $tomoeAngle = $Angle + $tomoe.Angle
-        $tomoeRadius = 35.0
+        # during the merge they swirl a half turn in the spin direction while closing in
+        $tomoeAngle = $Angle + $tomoe.Angle + ($spinDir * $conv * [Math]::PI)
+        $tomoeRadius = 35.0 * (1.0 - 0.9 * $conv)
         $headRadius = 7.5 * $scale
 
         $hx = 64.0 + $tomoeRadius * [Math]::Cos($tomoeAngle)

@@ -73,34 +73,45 @@ Right-click the tray icon:
 
 ```
 Swap to RAM Tracking       toggle between CPU and RAM
-Eyes                    >  18 Sharingan styles
+Eyes                    >  the eye styles
 Customize               >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
                         |  Color       >  10 presets + full colour picker
-                        |  Speed       >  0.20x .. 3.00x rotation
+                        |  Speed       >  slider, 1 to 100
+                        |  Direction   >  clockwise / counter-clockwise
+                        |  Invert Colors  swap tomoe and eye colour
                         |  Shuffle     >  cycle eyes randomly, on a timer
                         |  Glow           makes the colour glow
+                        |  Profiles    >  save / load a whole set of settings
                         |  Reset to Defaults
 Buy me a coffee            opens the support page in your browser
 Exit
 ```
 
 Everything applies live. Settings persist to `settings.json` next to the script.
+A profile is the same settings in one small JSON file under `profiles\`.
+
+When load climbs past the last threshold the three tomoe spiral inward, in the
+direction the eye is spinning, and merge into the Mangekyou.
 
 <p align="center">
   <img src="docs/customize.gif" width="420" alt="Walking through the Customize menu: thresholds, colour, speed, shuffle and glow">
   <br>
-  <em>Every setting lives in the tray menu — no separate settings window.</em>
+  <em>Every setting lives in the tray menu, no separate settings window.</em>
 </p>
 
 ## The eyes
 
-Itachi · Obito · Kakashi · Madara · Izuna · Sasuke · Shisui · Indra · Shin ·
-Sarada · Naka · Baru · Rai · Naori · Fugaku · Nanashi · Madara Eye 2 ·
-Sasuke Eye 2
+Itachi · Kakashi/Obito · Madara · Madara Eye 2 · Izuna · Sasuke · Sasuke Eternal ·
+Shisui · Indra · Shin · Sarada · Naka · Baru · Rai · Naori · Fugaku · Nanashi
 
-All eighteen are drawn from scratch with GDI+ at 128×128 and scaled down by
-Windows, which is what keeps them sharp at tray size. Every one rotates, and
-every pattern grows out of nothing as the stage builds.
+Drawn in code with GDI+ at 128x128 and scaled down by Windows, which keeps them
+sharp at tray size. Every one rotates, and every pattern grows out of nothing as
+the stage builds.
+
+You can also supply your own artwork: put SVG or PNG files in an `eyes\` folder
+next to the script (the file names are listed in `$global:EyeFiles` in the
+script). An eye with a file there is drawn from it; without one, the built-in
+drawing is used.
 
 ## Requirements
 
