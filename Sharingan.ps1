@@ -325,7 +325,7 @@ $global:Defaults = @{
     Glow           = $false
     GlowPulse      = $true    # heartbeat pulse; off = a steady glow
     PulseLevel     = 50       # pulse speed 1..100; 50 = normal
-    SpeedLevel     = 50       # 1..100 slider; 50 = 1.0x (the original speed)
+    SpeedLevel     = 50       # 0..100 slider; 0 = paused, 50 = 1.0x (the original speed)
     Direction      = 1        # 1 clockwise, -1 counter-clockwise
     Invert         = $false   # swap tomoe/pattern colour with the eye colour
     Shuffle        = $false
@@ -1394,7 +1394,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $ringAlpha = [int]((4.0 - $E) * 255)
     }
     
-    if ($Style -eq "Madara" -and $E -ge 3.0) {
+    if ($Style -eq "Madara" -and $E -ge 3.0 -and -not $art) {      # Classic Madara keeps its ring
         $ringAlpha = 255
     }
 
