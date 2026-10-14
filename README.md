@@ -12,6 +12,16 @@ then three, then Mangekyou — and spins faster the heavier the load.
 Pure PowerShell. No installer, no dependencies, no compiled binaries, nothing to
 trust. One script you can read top to bottom.
 
+## Two builds
+
+| Folder | What it is |
+| --- | --- |
+| **`V1/`** | The current build: speed slider, rotation direction, profiles, colour invert, the tomoe-to-Mangekyou transition, and optional artwork support. |
+| **`Classic/`** | The original build, kept exactly as it was. Simpler menu, fixed 18 hand-drawn eyes. |
+
+Each folder is self-contained. Use whichever you like; the instructions below
+work for both, just open the folder first.
+
 <p align="center">
   <img src="docs/evolve.gif" width="450" alt="The Sharingan awakening in the system tray as CPU load rises">
   <br>
@@ -34,7 +44,7 @@ Nothing to compile and no installer. Never used GitHub before? Just follow along
 
 1. Click the green **Code** button near the top of this page, then **Download ZIP**.
 2. Right-click the downloaded ZIP, choose **Extract All**, and pick any folder.
-3. Open that folder, right-click **Sharingan.ps1**, and choose **Run with PowerShell**.
+3. Open the `V1` folder (or `Classic`), right-click **Sharingan.ps1**, and choose **Run with PowerShell**.
 
 The eye appears in your system tray straight away. Right-click it for the menu.
 
@@ -45,12 +55,12 @@ The eye appears in your system tray straight away. Right-click it for the menu.
 **Prefer the command line?**
 
 ```
-powershell -ExecutionPolicy Bypass -File Sharingan.ps1
+powershell -ExecutionPolicy Bypass -File V1\Sharingan.ps1
 ```
 
 **Want it to start automatically when you log in?**
 
-Double-click `install-startup.bat`. Undo it any time with `remove-startup.bat`,
+Double-click `install-startup.bat` in the folder you chose. Undo it any time with `remove-startup.bat`,
 which also stops the running instance. Neither needs administrator rights.
 
 ## How it reacts
@@ -90,8 +100,9 @@ Exit
 Everything applies live. Settings persist to `settings.json` next to the script.
 A profile is the same settings in one small JSON file under `profiles\`.
 
-When load climbs past the last threshold the three tomoe spiral inward, in the
-direction the eye is spinning, and merge into the Mangekyou.
+When load climbs past the last threshold the three tomoe swirl in the direction
+the eye is spinning, their tails stretch into long arms, and those arms become
+the Mangekyou.
 
 <p align="center">
   <img src="docs/customize.gif" width="420" alt="Walking through the Customize menu: thresholds, colour, speed, shuffle and glow">

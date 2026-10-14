@@ -970,16 +970,18 @@ function Get-SharinganIcon($E, $Angle, $Style) {
     $art = Get-EyeArt $Style
     if ($null -eq $art -and $global:ArtFallback.ContainsKey($Style)) { $Style = $global:ArtFallback[$Style] }
 
-    # Merge phase (E 3 -> 4): the three tomoe spiral inward, in the rotation
-    # direction, and merge into the Mangekyou, which blooms out of where they met.
-    #   $conv  how far the tomoe have converged / swirled   (0..1, eased)
+    # Merge phase (E 3 -> 4): the three tomoe keep their orbit, swirl in the
+    # rotation direction and stretch their tails into long arms; those arms
+    # become the blades as the Mangekyou fades in underneath and the tomoe heads
+    # dissolve into it.
+    #   $conv  how far the tomoe have swirled / stretched    (0..1, eased)
     #   $fade  1 -> 0 as the tomoe dissolve into the pattern (late in the merge)
     #   $bloom how far the pattern has formed                (0..1, eased)
     $mu = [Math]::Max(0.0, [Math]::Min(1.0, $E - 3.0))
     $conv = $mu * $mu * (3.0 - 2.0 * $mu)
-    $fu = [Math]::Max(0.0, [Math]::Min(1.0, ($mu - 0.55) / 0.45))
+    $fu = [Math]::Max(0.0, [Math]::Min(1.0, ($mu - 0.65) / 0.35))
     $fade = 1.0 - ($fu * $fu * (3.0 - 2.0 * $fu))
-    $bu = [Math]::Max(0.0, [Math]::Min(1.0, ($mu - 0.30) / 0.70))
+    $bu = [Math]::Max(0.0, [Math]::Min(1.0, ($mu - 0.15) / 0.85))
     $bloom = $bu * $bu * (3.0 - 2.0 * $bu)
     $spinDir = 1.0
     if ($global:rotationDir -lt 0) { $spinDir = -1.0 }
@@ -1104,7 +1106,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
             # starts 120 degrees behind and catches up in the spin direction as it forms
             $unwind = -$spinDir * (1.0 - $bloom) * 120.0
             $g.RotateTransform([float]($Angle * 180.0 / [Math]::PI + $unwind))
-            $s = 0.401 * (0.25 + 0.75 * $bloom)
+            $s = 0.401 * (0.55 + 0.45 * $bloom)
             $g.ScaleTransform([float]$s, [float]$s)
             $g.TranslateTransform(-150.0, -150.0)
             Write-ArtPattern $g $art $eyeDraw $bloom
@@ -1418,17 +1420,17 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $scale = $tomoe.Scale
         if ($scale -le 0.01) { continue }
 
-        # during the merge they swirl a half turn in the spin direction while closing in
+        # during the merge they swirl a half turn in the spin direction
         $tomoeAngle = $Angle + $tomoe.Angle + ($spinDir * $conv * [Math]::PI)
-        $tomoeRadius = 35.0 * (1.0 - 0.9 * $conv)
-        $headRadius = 7.5 * $scale
+        $tomoeRadius = 35.0 * (1.0 + 0.08 * $conv)           # orbit holds, arms reach outward
+        $headRadius = 7.5 * $scale * (1.0 + 0.9 * $conv)     # heads fatten into blade tips
 
         $hx = 64.0 + $tomoeRadius * [Math]::Cos($tomoeAngle)
         $hy = 64.0 + $tomoeRadius * [Math]::Sin($tomoeAngle)
         $g.FillEllipse($blackBrush, [float]($hx - $headRadius), [float]($hy - $headRadius), [float]($headRadius * 2), [float]($headRadius * 2))
 
-        $tailLength = 0.75
-        $tailSteps = 12
+        $tailLength = 0.75 + 1.9 * $conv     # tails stretch into arms during the merge
+        $tailSteps = 30
         for ($j = 0; $j -le $tailSteps; $j++) {
             $tTail = $j / $tailSteps
             $phi = $tomoeAngle + ($tTail * $tailLength * $scale)
