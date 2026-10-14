@@ -179,8 +179,8 @@ public class SharinganSlider : Control {
         TabStop = true;
         Cursor = Cursors.Hand;
     }
-    public int Minimum { get { return min; } }
-    public int Maximum { get { return max; } }
+    public int Minimum { get { return min; } set { min = value; if (val < min) val = min; Invalidate(); } }
+    public int Maximum { get { return max; } set { max = value; if (val > max) val = max; Invalidate(); } }
     public int Value {
         get { return val; }
         set {
@@ -259,35 +259,72 @@ $global:selectedEyeStyle = "Itachi"        # Default set to Itachi
 $global:currentStage = 0.0                 # From 0.0 to 4.0
 $global:rotationAngle = 0.0
 
-# All selectable Sharingan styles, in menu order. Also the pool the shuffle draws from.
-$global:SharinganStyles = @(
-    "Itachi", "Obito", "Kakashi", "Madara", "Izuna", "Sasuke", "Shisui",
-    "Indra", "Shin", "Sarada", "Naka", "Baru", "Rai", "Naori", "Fugaku",
-    "Nanashi", "Madara Eye 2", "Sasuke Eye 2"
-)
+# Two eye sets, both always built in:
+#   Classic - the original hand-drawn eyes
+#   V1      - drawn from the original artwork in .\eyes\ (offered only for the
+#             eyes whose file is there; with no eyes\ folder only Classic shows)
+# An eye is identified as "Set:Name", e.g. "V1:Itachi" or "Classic:Obito".
+$global:EyeSets = [ordered]@{
+    "Classic" = @("Itachi", "Obito", "Kakashi", "Madara", "Izuna", "Sasuke", "Shisui",
+        "Indra", "Shin", "Sarada", "Naka", "Baru", "Rai", "Naori", "Fugaku",
+        "Nanashi", "Madara Eye 2", "Sasuke Eye 2")
+    "V1"      = @("Itachi", "Kakashi/Obito", "Madara", "Madara Eye 2", "Izuna", "Sasuke", "Sasuke Eternal",
+        "Shisui", "Indra", "Shin", "Sarada", "Naka", "Baru", "Rai", "Naori", "Fugaku",
+        "Nanashi", "BOoD")
+}
 
-# Names a V1 settings file or profile may carry; map them onto the drawn eyes.
-$global:StyleAliases = @{ "Kakashi/Obito" = "Kakashi"; "Sasuke Eternal" = "Sasuke Eye 2" }
+$global:EyesDir = Join-Path $PSScriptRoot "eyes"
+# V1 eye -> artwork file in .\eyes\ (SVG = vector, PNG = picture)
+$global:EyeFiles = @{
+    "Itachi" = "Itachi.svg"; "Kakashi/Obito" = "Kakashi-Obito.svg"; "Madara" = "Madara.svg"
+    "Madara Eye 2" = "Madara-Eternal.svg"; "Izuna" = "Izuna.svg"; "Sasuke" = "Sasuke.svg"
+    "Sasuke Eternal" = "Sasuke-Eternal.png"; "Shisui" = "Shisui.svg"; "Indra" = "Indra.svg"
+    "Shin" = "Shin.svg"; "Sarada" = "Sarada.svg"; "Naka" = "Naka.svg"; "Baru" = "Baru.svg"
+    "Rai" = "Rai.svg"; "Naori" = "Naori.svg"; "Fugaku" = "Fugaku.svg"; "Nanashi" = "Nanashi.svg"
+    "BOoD" = "BOoD.png"
+}
+$global:EyeSets["V1"] = @($global:EyeSets["V1"] | Where-Object { Test-Path (Join-Path $global:EyesDir $global:EyeFiles[$_]) })
+if ($global:EyeSets["V1"].Count -eq 0) { $global:EyeSets.Remove("V1") }
+
+# Every selectable eye, in menu order. Also what the shuffle draws from.
+$global:SharinganStyles = @(foreach ($set in $global:EyeSets.Keys) { foreach ($n in $global:EyeSets[$set]) { "${set}:$n" } })
+$global:DefaultStyle = "Classic:Itachi"
+if ($global:EyeSets.Contains("V1")) { $global:DefaultStyle = "V1:Itachi" }
+$global:selectedEyeStyle = $global:DefaultStyle
+
+# Settings and profiles from older builds stored a bare name ("Itachi"). Prefer
+# the artwork version when it exists, otherwise the hand-drawn one.
+function Resolve-StyleKey([string]$v) {
+    if ($global:SharinganStyles -contains $v) { return $v }
+    foreach ($set in @("V1", "Classic")) {
+        if ($global:SharinganStyles -contains "${set}:$v") { return "${set}:$v" }
+    }
+    return $null
+}
 
 # Factory defaults. Reset restores exactly these.
 $global:Defaults = @{
     Thresholds     = @(15.0, 35.0, 55.0, 75.0)   # load % that unlocks tomoe 1, 2, 3, Mangekyou
-    ColorR         = 220
-    ColorG         = 10
-    ColorB         = 15
+    ColorR         = 195      # #c30000, the mid stop of the eyes' red gradient
+    ColorG         = 0
+    ColorB         = 0
     Glow           = $false
+    GlowPulse      = $true    # heartbeat pulse; off = a steady glow
+    PulseLevel     = 50       # pulse speed 1..100; 50 = normal
     SpeedLevel     = 50       # 1..100 slider; 50 = 1.0x (the original speed)
     Direction      = 1        # 1 clockwise, -1 counter-clockwise
     Invert         = $false   # swap tomoe/pattern colour with the eye colour
     Shuffle        = $false
     ShuffleSeconds = 10
-    Style          = "Itachi"
+    Style          = $global:DefaultStyle
 }
 
 # Live settings (populated by Reset-Defaults, then overwritten by the saved file if present)
 $global:thresholds = @(15.0, 35.0, 55.0, 75.0)
-$global:eyeColor = [System.Drawing.Color]::FromArgb(220, 10, 15)
+$global:eyeColor = [System.Drawing.Color]::FromArgb(195, 0, 0)
 $global:glowOn = $false
+$global:glowPulse = $true
+$global:pulseLevel = 50
 $global:speedLevel = 50
 $global:speedMult = 1.0
 $global:rotationDir = 1
@@ -302,6 +339,16 @@ $global:SettingsPath = Join-Path $PSScriptRoot "settings.json"
 function Get-SpeedMult([int]$level) {
     if ($level -le 0) { return 0.0 }                 # 0 = paused
     return [Math]::Pow(6.0, ($level - 50) / 50.0)
+}
+
+# Pulse speed 1..100 -> heart-rate multiplier: 1 = 0.25x, 50 = 1.00x, 100 = 4.00x.
+function Get-PulseMult([int]$level) { return [Math]::Pow(4.0, ($level - 50) / 50.0) }
+
+function Update-PulseText {
+    if ($global:PulseTrack) {
+        $global:PulseTrack.ValueText = ("{0}   {1:N2}{2}" -f $global:pulseLevel, (Get-PulseMult $global:pulseLevel), [char]0x00D7)
+        $global:PulseTrack.Invalidate()
+    }
 }
 
 function Get-SpeedText {
@@ -328,6 +375,8 @@ function Get-SettingsObject {
         ColorG         = $global:eyeColor.G
         ColorB         = $global:eyeColor.B
         Glow           = $global:glowOn
+        GlowPulse      = $global:glowPulse
+        PulseLevel     = $global:pulseLevel
         SpeedLevel     = $global:speedLevel
         Direction      = $global:rotationDir
         Invert         = $global:invertOn
@@ -350,6 +399,8 @@ function Set-SettingsFromObject($s) {
         $global:eyeColor = [System.Drawing.Color]::FromArgb((& $c $s.ColorR), (& $c $s.ColorG), (& $c $s.ColorB))
     }
     if (& $has 'Glow') { $global:glowOn = [bool]$s.Glow }
+    if (& $has 'GlowPulse') { $global:glowPulse = [bool]$s.GlowPulse }
+    if (& $has 'PulseLevel') { $global:pulseLevel = [Math]::Max(1, [Math]::Min(100, [int]$s.PulseLevel)) }
     if (& $has 'SpeedLevel') { Set-SpeedLevel ([int]$s.SpeedLevel) }
     elseif (& $has 'Speed') {
         # settings.json written before the slider existed stored a multiplier
@@ -361,9 +412,8 @@ function Set-SettingsFromObject($s) {
     if (& $has 'Shuffle') { $global:shuffleOn = [bool]$s.Shuffle }
     if (& $has 'ShuffleSeconds') { $global:shuffleSeconds = [Math]::Max(1, [int]$s.ShuffleSeconds) }
     if (& $has 'Style') {
-        $st = [string]$s.Style
-        if ($global:StyleAliases.ContainsKey($st)) { $st = $global:StyleAliases[$st] }
-        if ($global:SharinganStyles -contains $st) { $global:selectedEyeStyle = $st }
+        $st = Resolve-StyleKey ([string]$s.Style)
+        if ($st) { $global:selectedEyeStyle = $st }
     }
 }
 
@@ -414,6 +464,8 @@ function Reset-Defaults {
     $global:thresholds = @($d.Thresholds)
     $global:eyeColor = [System.Drawing.Color]::FromArgb($d.ColorR, $d.ColorG, $d.ColorB)
     $global:glowOn = $d.Glow
+    $global:glowPulse = $d.GlowPulse
+    $global:pulseLevel = $d.PulseLevel
     Set-SpeedLevel $d.SpeedLevel
     $global:rotationDir = $d.Direction
     $global:invertOn = $d.Invert
@@ -439,12 +491,22 @@ $ExitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Exit")
 # Build the Sharingan style menu from the list above so the menu, the shuffle pool
 # and the check marks can never drift out of sync.
 $global:StyleMenuItems = @{}
-foreach ($styleName in $global:SharinganStyles) {
-    $item = New-Object System.Windows.Forms.ToolStripMenuItem($styleName)
-    $item.Tag = $styleName
-    $item.add_Click({ Set-EyeStyle $this.Tag })
-    $global:StyleMenuItems[$styleName] = $item
-    $StyleItem.DropDownItems.Add($item) | Out-Null
+$global:SetMenuItems = @{}
+foreach ($set in $global:EyeSets.Keys) {
+    $parent = $StyleItem
+    if ($global:EyeSets.Count -gt 1) {
+        $parent = New-Object System.Windows.Forms.ToolStripMenuItem($set)
+        $global:SetMenuItems[$set] = $parent
+        $StyleItem.DropDownItems.Add($parent) | Out-Null
+    }
+    foreach ($name in $global:EyeSets[$set]) {
+        $key = "${set}:$name"
+        $item = New-Object System.Windows.Forms.ToolStripMenuItem($name)
+        $item.Tag = $key
+        $item.add_Click({ Set-EyeStyle $this.Tag })
+        $global:StyleMenuItems[$key] = $item
+        $parent.DropDownItems.Add($item) | Out-Null
+    }
 }
 
 $ContextMenu.Items.Add($ToggleItem) | Out-Null
@@ -467,11 +529,21 @@ $ToggleItem.add_Click({
     })
 
 function Set-EyeStyle($styleName) {
+    if (-not $global:StyleMenuItems.ContainsKey($styleName)) { return }
     foreach ($mi in $global:StyleMenuItems.Values) { $mi.Checked = $false }
-    if ($global:StyleMenuItems.ContainsKey($styleName)) {
-        $global:StyleMenuItems[$styleName].Checked = $true
-        $global:selectedEyeStyle = $styleName
-    }
+    $global:StyleMenuItems[$styleName].Checked = $true
+    $global:selectedEyeStyle = $styleName
+    # tick the set (Classic / V1) the current eye belongs to
+    $current = ($styleName -split ':', 2)[0]
+    foreach ($set in $global:SetMenuItems.Keys) { $global:SetMenuItems[$set].Checked = ($set -eq $current) }
+}
+
+# Shuffle stays within the set of the current eye.
+function Get-ShufflePick {
+    $set = ($global:selectedEyeStyle -split ':', 2)[0]
+    $pool = @($global:SharinganStyles | Where-Object { $_ -like "${set}:*" -and $_ -ne $global:selectedEyeStyle })
+    if ($pool.Count -eq 0) { return $global:selectedEyeStyle }
+    return ($pool | Get-Random)
 }
 
 $SupportItem.add_Click({
@@ -531,6 +603,13 @@ function Sync-CustomMenu {
         }
     }
     $global:GlowItem.Checked = $global:glowOn
+    $global:PulseItem.Checked = $global:glowPulse
+    if ($global:PulseTrack -and $global:PulseTrack.Value -ne $global:pulseLevel) {
+        $global:SyncingPulse = $true
+        $global:PulseTrack.Value = $global:pulseLevel
+        $global:SyncingPulse = $false
+    }
+    Update-PulseText
     $global:InvertItem.Checked = $global:invertOn
     $global:ShuffleToggle.Checked = $global:shuffleOn
     if ($global:SpeedTrack -and $global:SpeedTrack.Value -ne $global:speedLevel) {
@@ -543,7 +622,8 @@ function Sync-CustomMenu {
 }
 
 $global:ColorPresets = @(
-    @{ Text = "Sharingan Red"; Value = @(220, 10, 15) }
+    @{ Text = "Sharingan Red"; Value = @(195, 0, 0) }
+    @{ Text = "Classic Red";   Value = @(220, 10, 15) }
     @{ Text = "Crimson";       Value = @(160, 0, 20) }
     @{ Text = "Orange";        Value = @(240, 110, 20) }
     @{ Text = "Gold";          Value = @(230, 180, 30) }
@@ -703,15 +783,43 @@ Add-ChoiceMenu $ShuffleItem "Interval" $intervalChoices `
 { param($v) $global:shuffleSeconds = [int]$v } | Out-Null
 
 # --- Glow ----------------------------------------------------------------
-# A single on/off, so it is the menu item itself rather than a submenu holding
-# one toggle - one click instead of two.
-$global:GlowItem = New-Object System.Windows.Forms.ToolStripMenuItem("Glow")
+# On/off, the heartbeat pulse (off = a steady glow) and the pulse speed.
+$GlowMenu = New-Object System.Windows.Forms.ToolStripMenuItem("Glow")
+$CustomItem.DropDownItems.Add($GlowMenu) | Out-Null
+$global:GlowItem = New-Object System.Windows.Forms.ToolStripMenuItem("On")
 $global:GlowItem.add_Click({
         $global:glowOn = -not $global:glowOn
         Save-Settings
         Sync-CustomMenu
     })
-$CustomItem.DropDownItems.Add($global:GlowItem) | Out-Null
+$GlowMenu.DropDownItems.Add($global:GlowItem) | Out-Null
+$global:PulseItem = New-Object System.Windows.Forms.ToolStripMenuItem("Heartbeat pulse")
+$global:PulseItem.add_Click({
+        $global:glowPulse = -not $global:glowPulse
+        Save-Settings
+        Sync-CustomMenu
+    })
+$GlowMenu.DropDownItems.Add($global:PulseItem) | Out-Null
+$GlowMenu.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
+$global:PulseTrack = New-Object SharinganSlider($global:MenuTheme)
+$global:PulseTrack.Font = $global:MenuFont
+$global:PulseTrack.Caption = "Pulse speed"
+$global:PulseTrack.Minimum = 1
+$global:SyncingPulse = $true
+$global:PulseTrack.Value = $global:pulseLevel
+$global:SyncingPulse = $false
+$global:PulseTrack.add_ValueChanged({
+        if ($global:SyncingPulse) { return }
+        $global:pulseLevel = $global:PulseTrack.Value
+        Update-PulseText
+    })
+$global:PulseTrack.add_ValueCommitted({ Save-Settings })
+$pulseHost = New-Object System.Windows.Forms.ToolStripControlHost($global:PulseTrack)
+$pulseHost.AutoSize = $false
+$pulseHost.Size = $global:PulseTrack.Size
+$pulseHost.Margin = New-Object System.Windows.Forms.Padding(0)
+$GlowMenu.DropDownItems.Add($pulseHost) | Out-Null
+Update-PulseText
 
 # --- Profiles ------------------------------------------------------------
 # A profile is the whole settings set in one small JSON file under .\profiles\.
@@ -1120,11 +1228,9 @@ function Import-RasterEye([string]$path) {
     return @{ Raster = $bmp; Pattern = $null; Attr = $null; AttrKey = $null }
 }
 
-# 4c. Eye artwork loader (unused in Classic: EyeFiles is empty).
-$global:EyesDir = Join-Path $PSScriptRoot "eyes"
-# Classic draws every eye in code, so there is no artwork to load.
-$global:EyeFiles = @{}
-$global:ArtFallback = @{}
+# 4c. Eye artwork loader. The files are listed in $global:EyeFiles (section 2).
+# If a V1 file is missing or unreadable, that eye falls back to a hand-drawn one.
+$global:ArtFallback = @{ "Kakashi/Obito" = "Kakashi"; "Sasuke Eternal" = "Sasuke Eye 2"; "BOoD" = "Itachi" }
 $script:EyeArtCache = @{}
 
 # Loaded on first use and cached; $null when the file is missing or unreadable.
@@ -1146,17 +1252,19 @@ function Get-EyeArt([string]$style) {
 }
 
 # Heartbeat envelope for the glow, 0..1. Hard attack, quick decay: "lub" then a
-# softer "dub". The heart rate follows the load: 55 bpm idle, 120 bpm flat out.
+# softer "dub". The heart rate follows the load (55 bpm idle, 120 bpm flat out)
+# times the Pulse speed setting.
 # The phase advances by real time, so a tempo change never makes it jump.
 $script:PulseClock = [System.Diagnostics.Stopwatch]::StartNew()
 $script:PulseLast = 0.0
 $script:PulsePhase = 0.0
 function Get-HeartBeat {
+    if (-not $global:glowPulse) { return 0.65 }          # pulse off: a steady glow
     $now = $script:PulseClock.Elapsed.TotalSeconds
     $dt = [Math]::Min(0.25, $now - $script:PulseLast)
     $script:PulseLast = $now
     $load = [Math]::Max(0.0, [Math]::Min(100.0, [double]$global:currentLoadPercent))
-    $bpm = 55.0 + 0.65 * $load
+    $bpm = (55.0 + 0.65 * $load) * (Get-PulseMult $global:pulseLevel)
     $script:PulsePhase = ($script:PulsePhase + $dt * $bpm / 60.0) % 1.0
     $p = $script:PulsePhase
     $lub = [Math]::Exp(-$p / 0.11)
@@ -1171,7 +1279,12 @@ function Get-HeartBeat {
 function Get-SharinganIcon($E, $Angle, $Style) {
     # Eyes with artwork in .\eyes\ are drawn from it; without it, fall back to the
     # older built-in drawing for that eye.
-    $art = Get-EyeArt $Style
+    # Keys are "Set:Name". Classic eyes are always hand-drawn; V1 eyes use their
+    # artwork (or the hand-drawn version if the file is missing or broken).
+    $set = "V1"
+    if ($Style -match '^(Classic|V1):(.+)$') { $set = $Matches[1]; $Style = $Matches[2] }
+    $art = $null
+    if ($set -eq "V1") { $art = Get-EyeArt $Style }
     if ($null -eq $art -and $global:ArtFallback.ContainsKey($Style)) { $Style = $global:ArtFallback[$Style] }
 
     # Merge phase (E 3 -> 4): the three tomoe keep their orbit, swirl in the
@@ -1716,8 +1829,7 @@ $RenderFrame = {
         $script:shuffleTimer += $tickInterval
         if ($script:shuffleTimer -ge ($global:shuffleSeconds * 1000)) {
             $script:shuffleTimer = 0
-            $pool = @($global:SharinganStyles | Where-Object { $_ -ne $global:selectedEyeStyle })
-            Set-EyeStyle ($pool | Get-Random)
+            Set-EyeStyle (Get-ShufflePick)
         }
     }
     else {
@@ -1761,7 +1873,8 @@ $RenderFrame = {
     # Update system tray
     $modeText = if ($global:monitoringModeIsRAM) { "RAM" } else { "CPU" }
     $NotifyIcon.Icon = $iconObj.Icon
-    $NotifyIcon.Text = "Sharingan ($global:selectedEyeStyle $modeText): $([Math]::Round($global:currentLoadPercent, 1))%"
+    $eyeParts = $global:selectedEyeStyle -split ':', 2
+    $NotifyIcon.Text = "Sharingan ($($eyeParts[1]), $($eyeParts[0]) - $modeText): $([Math]::Round($global:currentLoadPercent, 1))%"
 
     # Destroy the old icon objects to prevent GDI / system memory leaks
     if ($oldIcon -ne $null) {

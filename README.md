@@ -12,28 +12,6 @@ then three, then Mangekyou — and spins faster the heavier the load.
 Pure PowerShell. No installer, no dependencies, no compiled binaries, nothing to
 trust. One script you can read top to bottom.
 
-## Two builds
-
-| Folder | What it is |
-| --- | --- |
-| **`V1/`** | The current build: speed slider, rotation direction, profiles, colour invert, the tomoe-to-Mangekyou transition, and optional artwork support. |
-| **`Classic/`** | The original build, kept exactly as it was. Simpler menu, fixed 18 hand-drawn eyes. |
-
-Each folder is self-contained. Use whichever you like; the instructions below
-work for both, just open the folder first.
-
-<p align="center">
-  <img src="docs/evolve.gif" width="450" alt="The Sharingan awakening in the system tray as CPU load rises">
-  <br>
-  <em>Real capture from the tray — dormant, then awakening as the machine works.</em>
-</p>
-
-<p align="center">
-  <a href="https://buymeacoffee.com/boode">
-    <img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-Support%20this%20project-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy me a coffee" height="42">
-  </a>
-</p>
-
 ## Download and install
 
 Nothing to compile and no installer. Never used GitHub before? Just follow along:
@@ -44,7 +22,7 @@ Nothing to compile and no installer. Never used GitHub before? Just follow along
 
 1. Click the green **Code** button near the top of this page, then **Download ZIP**.
 2. Right-click the downloaded ZIP, choose **Extract All**, and pick any folder.
-3. Open the `V1` folder (or `Classic`), right-click **Sharingan.ps1**, and choose **Run with PowerShell**.
+3. Open that folder, right-click **Sharingan.ps1**, and choose **Run with PowerShell**.
 
 The eye appears in your system tray straight away. Right-click it for the menu.
 
@@ -55,12 +33,12 @@ The eye appears in your system tray straight away. Right-click it for the menu.
 **Prefer the command line?**
 
 ```
-powershell -ExecutionPolicy Bypass -File V1\Sharingan.ps1
+powershell -ExecutionPolicy Bypass -File Sharingan.ps1
 ```
 
 **Want it to start automatically when you log in?**
 
-Double-click `install-startup.bat` in the folder you chose. Undo it any time with `remove-startup.bat`,
+Double-click `install-startup.bat`. Undo it any time with `remove-startup.bat`,
 which also stops the running instance. Neither needs administrator rights.
 
 ## How it reacts
@@ -83,14 +61,15 @@ Right-click the tray icon:
 
 ```
 Swap to RAM Tracking       toggle between CPU and RAM
-Eyes                    >  the eye styles
+Eyes                    >  Classic  >  the hand-drawn eyes
+                        |  V1       >  the artwork eyes (when eyes\ is present)
 Customize               >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
                         |  Color       >  10 presets + full colour picker
-                        |  Speed       >  slider, 1 to 100
+                        |  Speed       >  slider, 0 (paused) to 100
                         |  Direction   >  clockwise / counter-clockwise
                         |  Invert Colors  swap tomoe and eye colour
                         |  Shuffle     >  cycle eyes randomly, on a timer
-                        |  Glow           makes the colour glow
+                        |  Glow        >  on/off, heartbeat pulse, pulse speed
                         |  Profiles    >  save / load a whole set of settings
                         |  Reset to Defaults
 Buy me a coffee            opens the support page in your browser
@@ -112,17 +91,17 @@ the Mangekyou.
 
 ## The eyes
 
-Itachi · Kakashi/Obito · Madara · Madara Eye 2 · Izuna · Sasuke · Sasuke Eternal ·
-Shisui · Indra · Shin · Sarada · Naka · Baru · Rai · Naori · Fugaku · Nanashi
+**Classic** - drawn in code: Itachi · Obito · Kakashi · Madara · Izuna · Sasuke ·
+Shisui · Indra · Shin · Sarada · Naka · Baru · Rai · Naori · Fugaku · Nanashi ·
+Madara Eye 2 · Sasuke Eye 2
 
-Drawn in code with GDI+ at 128x128 and scaled down by Windows, which keeps them
-sharp at tray size. Every one rotates, and every pattern grows out of nothing as
-the stage builds.
+**V1** - drawn from artwork you supply in an `eyes\` folder next to the script
+(the expected file names are in `$global:EyeFiles` in the script). V1 shows up
+in the menu only for the eyes whose file is present; with no `eyes\` folder the
+menu simply lists the Classic eyes.
 
-You can also supply your own artwork: put SVG or PNG files in an `eyes\` folder
-next to the script (the file names are listed in `$global:EyeFiles` in the
-script). An eye with a file there is drawn from it; without one, the built-in
-drawing is used.
+Every eye rotates and grows out of nothing as the stage builds, and shuffle stays
+within the set you are on.
 
 ## Requirements
 
