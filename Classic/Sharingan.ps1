@@ -61,6 +61,195 @@ public class Win32 {
 "@
 Add-Type -TypeDefinition $MetricsSignature
 
+# 1b. Modern menu look: a flat, minimal renderer and a custom-drawn slider.
+# Written in C# because per-pixel painting from PowerShell event handlers is slow
+# and flickers; everything here only paints, all logic stays in the script.
+$ModernUiSource = @'
+using System;
+using System.Collections.Generic;
+using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Runtime.InteropServices;
+using System.Windows.Forms;
+
+public class SharinganMenuTheme {
+    public Color Back, Text, TextDim, Hover, Line, Border, Accent, Thumb;
+    public static SharinganMenuTheme Create(bool dark) {
+        SharinganMenuTheme t = new SharinganMenuTheme();
+        t.Accent = Color.FromArgb(220, 38, 38);
+        if (dark) {
+            t.Back = Color.FromArgb(32, 32, 32);   t.Text = Color.FromArgb(242, 242, 242);
+            t.TextDim = Color.FromArgb(150, 150, 150); t.Hover = Color.FromArgb(55, 55, 55);
+            t.Line = Color.FromArgb(62, 62, 62);    t.Border = Color.FromArgb(58, 58, 58);
+            t.Thumb = Color.FromArgb(245, 245, 245);
+        } else {
+            t.Back = Color.FromArgb(251, 251, 251); t.Text = Color.FromArgb(26, 26, 26);
+            t.TextDim = Color.FromArgb(120, 120, 120); t.Hover = Color.FromArgb(234, 234, 234);
+            t.Line = Color.FromArgb(222, 222, 222); t.Border = Color.FromArgb(214, 214, 214);
+            t.Thumb = Color.White;
+        }
+        return t;
+    }
+}
+
+public class SharinganMenuRenderer : ToolStripProfessionalRenderer {
+    readonly SharinganMenuTheme t;
+    readonly HashSet<IntPtr> rounded = new HashSet<IntPtr>();
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr hwnd, int attr, ref int value, int size);
+
+    public SharinganMenuRenderer(SharinganMenuTheme theme) { t = theme; RoundedEdges = false; }
+
+    protected override void OnRenderToolStripBackground(ToolStripRenderEventArgs e) {
+        using (SolidBrush b = new SolidBrush(t.Back)) e.Graphics.FillRectangle(b, e.AffectedBounds);
+        // Windows 11 rounds the menu window itself; older Windows ignores this.
+        ToolStripDropDown dd = e.ToolStrip as ToolStripDropDown;
+        if (dd != null && dd.IsHandleCreated && !rounded.Contains(dd.Handle)) {
+            int round = 2;
+            try { DwmSetWindowAttribute(dd.Handle, 33, ref round, 4); } catch { }
+            rounded.Add(dd.Handle);
+        }
+    }
+    protected override void OnRenderToolStripBorder(ToolStripRenderEventArgs e) {
+        using (Pen p = new Pen(t.Border)) e.Graphics.DrawRectangle(p, 0, 0, e.ToolStrip.Width - 1, e.ToolStrip.Height - 1);
+    }
+    protected override void OnRenderImageMargin(ToolStripRenderEventArgs e) { }
+    protected override void OnRenderMenuItemBackground(ToolStripItemRenderEventArgs e) {
+        if (!e.Item.Selected || !e.Item.Enabled) return;
+        Rectangle r = new Rectangle(4, 1, e.Item.Width - 8, e.Item.Height - 2);
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (GraphicsPath gp = Round(r, 5)) using (SolidBrush b = new SolidBrush(t.Hover)) e.Graphics.FillPath(b, gp);
+    }
+    protected override void OnRenderSeparator(ToolStripSeparatorRenderEventArgs e) {
+        int y = e.Item.Height / 2;
+        using (Pen p = new Pen(t.Line)) e.Graphics.DrawLine(p, 12, y, e.Item.Width - 12, y);
+    }
+    protected override void OnRenderItemText(ToolStripItemTextRenderEventArgs e) {
+        e.TextColor = e.Item.Enabled ? t.Text : t.TextDim;
+        base.OnRenderItemText(e);
+    }
+    protected override void OnRenderArrow(ToolStripArrowRenderEventArgs e) {
+        Rectangle r = e.ArrowRectangle;
+        float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (Pen p = new Pen(t.TextDim, 1.4f)) {
+            p.StartCap = LineCap.Round; p.EndCap = LineCap.Round;
+            e.Graphics.DrawLines(p, new PointF[] { new PointF(cx - 2f, cy - 4f), new PointF(cx + 2f, cy), new PointF(cx - 2f, cy + 4f) });
+        }
+    }
+    protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e) {
+        Rectangle r = e.ImageRectangle;
+        float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
+        e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+        using (Pen p = new Pen(t.Accent, 1.8f)) {
+            p.StartCap = LineCap.Round; p.EndCap = LineCap.Round; p.LineJoin = LineJoin.Round;
+            e.Graphics.DrawLines(p, new PointF[] { new PointF(cx - 4f, cy), new PointF(cx - 1.2f, cy + 3f), new PointF(cx + 4.5f, cy - 3.5f) });
+        }
+    }
+    internal static GraphicsPath Round(RectangleF r, float rad) {
+        GraphicsPath gp = new GraphicsPath();
+        float d = rad * 2;
+        if (r.Width < d) d = r.Width;
+        if (r.Height < d) d = r.Height;
+        if (d <= 0) { gp.AddRectangle(r); return gp; }
+        gp.AddArc(r.X, r.Y, d, d, 180, 90);
+        gp.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+        gp.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+        gp.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+        gp.CloseFigure();
+        return gp;
+    }
+}
+
+// Flat slider: thin rounded track, filled to the value in the accent colour, round thumb.
+public class SharinganSlider : Control {
+    int val = 50, min = 0, max = 100;
+    bool drag, hover;
+    readonly SharinganMenuTheme t;
+    public string Caption = "";
+    public string ValueText = "";
+    public event EventHandler ValueChanged;
+    public event EventHandler ValueCommitted;
+
+    public SharinganSlider(SharinganMenuTheme theme) {
+        t = theme;
+        SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer | ControlStyles.UserPaint |
+                 ControlStyles.ResizeRedraw | ControlStyles.Selectable, true);
+        Size = new Size(260, 58);
+        BackColor = t.Back;
+        TabStop = true;
+        Cursor = Cursors.Hand;
+    }
+    public int Minimum { get { return min; } }
+    public int Maximum { get { return max; } }
+    public int Value {
+        get { return val; }
+        set {
+            int v = Math.Max(min, Math.Min(max, value));
+            if (v == val) return;
+            val = v; Invalidate();
+            if (ValueChanged != null) ValueChanged(this, EventArgs.Empty);
+        }
+    }
+    public void Step(int delta) { Value = val + delta; Commit(); }
+    void Commit() { if (ValueCommitted != null) ValueCommitted(this, EventArgs.Empty); }
+    RectangleF Track { get { return new RectangleF(16f, 38f, Width - 32f, 4f); } }
+    int ValueAt(int px) {
+        RectangleF tr = Track;
+        float f = (px - tr.X) / tr.Width;
+        return (int)Math.Round(min + Math.Max(0f, Math.Min(1f, f)) * (max - min));
+    }
+    protected override void OnPaint(PaintEventArgs e) {
+        Graphics g = e.Graphics;
+        g.Clear(t.Back);
+        g.SmoothingMode = SmoothingMode.AntiAlias;
+        TextRenderer.DrawText(g, Caption, Font, new Point(14, 9), t.Text, TextFormatFlags.NoPadding);
+        Size vs = TextRenderer.MeasureText(ValueText, Font, Size.Empty, TextFormatFlags.NoPadding);
+        TextRenderer.DrawText(g, ValueText, Font, new Point(Width - 16 - vs.Width, 9), t.TextDim, TextFormatFlags.NoPadding);
+        RectangleF tr = Track;
+        float frac = (val - min) / (float)(max - min);
+        float x = tr.X + frac * tr.Width;
+        using (SolidBrush b = new SolidBrush(t.Line)) using (GraphicsPath gp = SharinganMenuRenderer.Round(tr, 2f)) g.FillPath(b, gp);
+        if (x - tr.X > 0.5f)
+            using (SolidBrush b = new SolidBrush(t.Accent)) using (GraphicsPath gp = SharinganMenuRenderer.Round(new RectangleF(tr.X, tr.Y, x - tr.X, tr.Height), 2f)) g.FillPath(b, gp);
+        float r = (drag || hover || Focused) ? 8f : 7f;
+        float cy = tr.Y + tr.Height / 2f;
+        using (SolidBrush b = new SolidBrush(Color.FromArgb(45, 0, 0, 0))) g.FillEllipse(b, x - r, cy - r + 1.2f, r * 2, r * 2);
+        using (SolidBrush b = new SolidBrush(t.Thumb)) g.FillEllipse(b, x - r, cy - r, r * 2, r * 2);
+        using (Pen p = new Pen(t.Accent, 2f)) g.DrawEllipse(p, x - r + 1f, cy - r + 1f, r * 2 - 2f, r * 2 - 2f);
+    }
+    protected override void OnMouseDown(MouseEventArgs e) { base.OnMouseDown(e); if (e.Button != MouseButtons.Left) return; drag = true; Capture = true; Focus(); Value = ValueAt(e.X); Invalidate(); }
+    protected override void OnMouseMove(MouseEventArgs e) { base.OnMouseMove(e); if (!hover) { hover = true; Invalidate(); } if (drag) Value = ValueAt(e.X); }
+    protected override void OnMouseUp(MouseEventArgs e) { base.OnMouseUp(e); if (!drag) return; drag = false; Capture = false; Invalidate(); Commit(); }
+    protected override void OnMouseLeave(EventArgs e) { base.OnMouseLeave(e); hover = false; Invalidate(); }
+    protected override void OnMouseWheel(MouseEventArgs e) { base.OnMouseWheel(e); Step(e.Delta > 0 ? 1 : -1); }
+    protected override bool IsInputKey(Keys k) { return k == Keys.Left || k == Keys.Right || k == Keys.Up || k == Keys.Down || base.IsInputKey(k); }
+    protected override void OnKeyDown(KeyEventArgs e) {
+        base.OnKeyDown(e);
+        int d = 0;
+        if (e.KeyCode == Keys.Left || e.KeyCode == Keys.Down) d = -1;
+        else if (e.KeyCode == Keys.Right || e.KeyCode == Keys.Up) d = 1;
+        else if (e.KeyCode == Keys.PageDown) d = -10;
+        else if (e.KeyCode == Keys.PageUp) d = 10;
+        else if (e.KeyCode == Keys.Home) d = min - val;
+        else if (e.KeyCode == Keys.End) d = max - val;
+        if (d != 0) { Step(d); e.Handled = true; }
+    }
+    protected override void OnGotFocus(EventArgs e) { base.OnGotFocus(e); Invalidate(); }
+    protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
+}
+'@
+Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition $ModernUiSource
+
+# Follow Windows' light/dark setting for the tray menu.
+$global:MenuDark = $false
+try {
+    $global:MenuDark = ((Get-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' -ErrorAction Stop).SystemUsesLightTheme -eq 0)
+}
+catch { }
+$global:MenuTheme = [SharinganMenuTheme]::Create($global:MenuDark)
+$global:MenuFont = New-Object System.Drawing.Font("Segoe UI", 9.5)
+[System.Windows.Forms.ToolStripManager]::Renderer = New-Object SharinganMenuRenderer($global:MenuTheme)
+
 # 2. Global State Variables
 $global:running = $true
 $global:monitoringModeIsRAM = $false       # False = CPU, True = RAM
@@ -110,10 +299,22 @@ $global:SettingsPath = Join-Path $PSScriptRoot "settings.json"
 
 # Slider 1..100 -> rotation multiplier. Exponential so each notch feels the same:
 # 1 = 0.17x, 50 = 1.00x (original speed), 100 = 6.00x.
-function Get-SpeedMult([int]$level) { return [Math]::Pow(6.0, ($level - 50) / 50.0) }
+function Get-SpeedMult([int]$level) {
+    if ($level -le 0) { return 0.0 }                 # 0 = paused
+    return [Math]::Pow(6.0, ($level - 50) / 50.0)
+}
+
+function Get-SpeedText {
+    if ($global:speedLevel -le 0) { return "Paused" }
+    return ("{0}   {1:N2}{2}" -f $global:speedLevel, $global:speedMult, [char]0x00D7)
+}
+
+function Update-SpeedText {
+    if ($global:SpeedTrack) { $global:SpeedTrack.ValueText = Get-SpeedText; $global:SpeedTrack.Invalidate() }
+}
 
 function Set-SpeedLevel([int]$level) {
-    $global:speedLevel = [Math]::Max(1, [Math]::Min(100, $level))
+    $global:speedLevel = [Math]::Max(0, [Math]::Min(100, $level))
     $global:speedMult = Get-SpeedMult $global:speedLevel
 }
 
@@ -337,7 +538,7 @@ function Sync-CustomMenu {
         $global:SpeedTrack.Value = $global:speedLevel
         $global:SyncingSpeed = $false
     }
-    if ($global:SpeedLabel) { $global:SpeedLabel.Text = ("Speed {0}   ({1:N2}x)" -f $global:speedLevel, $global:speedMult) }
+    Update-SpeedText
     $global:ColorSwatchItem.Text = "Current: $(Get-ColorName $global:eyeColor)"
 }
 
@@ -431,38 +632,29 @@ $PickColorItem.add_Click({
 $ColorItem.DropDownItems.Add($PickColorItem) | Out-Null
 
 # --- Speed ---------------------------------------------------------------
-# A real slider (1..100) hosted inside the menu. The label shows the level and
-# the resulting multiplier; the value is saved when the mouse/key is released.
+# Custom-drawn 0..100 slider in the menu: 0 pauses the spin, 50 is the original
+# speed. Drag, click, mouse wheel or arrow keys (PageUp/Down = 10); saved on release.
 $SpeedItem = New-Object System.Windows.Forms.ToolStripMenuItem("Speed")
 $CustomItem.DropDownItems.Add($SpeedItem) | Out-Null
-
-$speedPanel = New-Object System.Windows.Forms.Panel
-$speedPanel.Size = New-Object System.Drawing.Size(250, 62)
-$global:SpeedLabel = New-Object System.Windows.Forms.Label
-$global:SpeedLabel.SetBounds(10, 6, 230, 18)
-$global:SpeedLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-$global:SpeedTrack = New-Object System.Windows.Forms.TrackBar
-$global:SpeedTrack.SetBounds(4, 26, 242, 32)
-$global:SpeedTrack.Minimum = 1
-$global:SpeedTrack.Maximum = 100
-$global:SpeedTrack.TickFrequency = 10
-$global:SpeedTrack.LargeChange = 10
-$global:SpeedTrack.SmallChange = 1
+$global:SpeedTrack = New-Object SharinganSlider($global:MenuTheme)
+$global:SpeedTrack.Font = $global:MenuFont
+$global:SpeedTrack.Caption = "Speed"
+$global:SyncingSpeed = $true
 $global:SpeedTrack.Value = $global:speedLevel
 $global:SyncingSpeed = $false
 $global:SpeedTrack.add_ValueChanged({
         if ($global:SyncingSpeed) { return }
         Set-SpeedLevel $global:SpeedTrack.Value
-        $global:SpeedLabel.Text = ("Speed {0}   ({1:N2}x)" -f $global:speedLevel, $global:speedMult)
+        Update-SpeedText
     })
-$global:SpeedTrack.add_MouseUp({ Save-Settings })
-$global:SpeedTrack.add_KeyUp({ Save-Settings })
-$speedPanel.Controls.Add($global:SpeedLabel)
-$speedPanel.Controls.Add($global:SpeedTrack)
-$speedHost = New-Object System.Windows.Forms.ToolStripControlHost($speedPanel)
+$global:SpeedTrack.add_ValueCommitted({ Save-Settings })
+$speedHost = New-Object System.Windows.Forms.ToolStripControlHost($global:SpeedTrack)
 $speedHost.AutoSize = $false
-$speedHost.Size = $speedPanel.Size
+$speedHost.Size = $global:SpeedTrack.Size
+$speedHost.Margin = New-Object System.Windows.Forms.Padding(0)
 $SpeedItem.DropDownItems.Add($speedHost) | Out-Null
+$SpeedItem.DropDown.ShowImageMargin = $false     # no check-mark gutter beside the slider
+Update-SpeedText
 
 # --- Direction -----------------------------------------------------------
 $DirectionItem = New-Object System.Windows.Forms.ToolStripMenuItem("Direction")
@@ -560,7 +752,7 @@ function Build-ProfilesMenu {
         })
     $ProfilesItem.DropDownItems.Add($open) | Out-Null
 }
-$ProfilesItem.add_DropDownOpening({ Build-ProfilesMenu })
+$ProfilesItem.add_DropDownOpening({ Build-ProfilesMenu; Set-ModernMenu $ProfilesItem.DropDownItems })
 Build-ProfilesMenu
 
 # --- Reset ---------------------------------------------------------------
@@ -572,6 +764,19 @@ $ResetItem.add_Click({
         Sync-CustomMenu
     })
 $CustomItem.DropDownItems.Add($ResetItem) | Out-Null
+
+# Roomier, consistent items everywhere (the look itself comes from the renderer).
+function Set-ModernMenu($items) {
+    foreach ($it in $items) {
+        if ($it -is [System.Windows.Forms.ToolStripMenuItem]) {
+            $it.Padding = New-Object System.Windows.Forms.Padding(2, 5, 2, 5)
+            $it.DropDown.Font = $global:MenuFont
+            Set-ModernMenu $it.DropDownItems
+        }
+    }
+}
+$ContextMenu.Font = $global:MenuFont
+Set-ModernMenu $ContextMenu.Items
 
 Sync-CustomMenu
 
@@ -940,6 +1145,26 @@ function Get-EyeArt([string]$style) {
     return $art
 }
 
+# Heartbeat envelope for the glow, 0..1. Hard attack, quick decay: "lub" then a
+# softer "dub". The heart rate follows the load: 55 bpm idle, 120 bpm flat out.
+# The phase advances by real time, so a tempo change never makes it jump.
+$script:PulseClock = [System.Diagnostics.Stopwatch]::StartNew()
+$script:PulseLast = 0.0
+$script:PulsePhase = 0.0
+function Get-HeartBeat {
+    $now = $script:PulseClock.Elapsed.TotalSeconds
+    $dt = [Math]::Min(0.25, $now - $script:PulseLast)
+    $script:PulseLast = $now
+    $load = [Math]::Max(0.0, [Math]::Min(100.0, [double]$global:currentLoadPercent))
+    $bpm = 55.0 + 0.65 * $load
+    $script:PulsePhase = ($script:PulsePhase + $dt * $bpm / 60.0) % 1.0
+    $p = $script:PulsePhase
+    $lub = [Math]::Exp(-$p / 0.11)
+    $dub = 0.0
+    if ($p -ge 0.27) { $dub = 0.6 * [Math]::Exp(-($p - 0.27) / 0.11) }
+    return [Math]::Min(1.0, [Math]::Max($lub, $dub))
+}
+
 # 5. Sharingan Drawing Routine (128x128 High Resolution)
 # E: Current morph stage (0.0 to 4.0)
 # Angle: Rotation angle in radians
@@ -978,30 +1203,34 @@ function Get-SharinganIcon($E, $Angle, $Style) {
     $blackBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Black)
     $borderPen = New-Object System.Drawing.Pen([System.Drawing.Color]::Black, 4.5)
 
-    # A0. Optional glow: purely a colour change - the eye keeps exactly the same
-    # size and geometry either way. Push the colour to full saturation, then lift
-    # it toward white so it reads as lit-from-within rather than just lighter.
+    # A0. Glow: a heartbeat. Each beat ("lub", then a softer "dub") hits hard and
+    # decays: the eye colour flashes saturated and bright and a halo pushes out
+    # from the rim. Between beats the eye is its normal self. Size never changes.
     $eyeDraw = $global:eyeColor
     if ($global:glowOn) {
-        $peak = [Math]::Max($eyeDraw.R, [Math]::Max($eyeDraw.G, $eyeDraw.B))
-        if ($peak -lt 1) { $peak = 1 }
-        $k = 255.0 / $peak
-        $lift = 0.28
-        $eyeDraw = [System.Drawing.Color]::FromArgb(
-            [int][Math]::Min(255, ($eyeDraw.R * $k) + ((255 - ($eyeDraw.R * $k)) * $lift)),
-            [int][Math]::Min(255, ($eyeDraw.G * $k) + ((255 - ($eyeDraw.G * $k)) * $lift)),
-            [int][Math]::Min(255, ($eyeDraw.B * $k) + ((255 - ($eyeDraw.B * $k)) * $lift)))
-        $redBrush.Dispose()
-        $redBrush = New-Object System.Drawing.SolidBrush($eyeDraw)
+        $beat = Get-HeartBeat
+        if ($beat -gt 0.004) {
+            $peak = [Math]::Max($eyeDraw.R, [Math]::Max($eyeDraw.G, $eyeDraw.B))
+            if ($peak -lt 1) { $peak = 1 }
+            $k = 255.0 / $peak
+            $hr = [Math]::Min(255.0, ($eyeDraw.R * $k) + ((255 - ($eyeDraw.R * $k)) * 0.18))
+            $hg = [Math]::Min(255.0, ($eyeDraw.G * $k) + ((255 - ($eyeDraw.G * $k)) * 0.18))
+            $hb = [Math]::Min(255.0, ($eyeDraw.B * $k) + ((255 - ($eyeDraw.B * $k)) * 0.18))
+            $eyeDraw = [System.Drawing.Color]::FromArgb(
+                [int]($global:eyeColor.R + ($hr - $global:eyeColor.R) * $beat),
+                [int]($global:eyeColor.G + ($hg - $global:eyeColor.G) * $beat),
+                [int]($global:eyeColor.B + ($hb - $global:eyeColor.B) * $beat))
+            $redBrush.Dispose()
+            $redBrush = New-Object System.Drawing.SolidBrush($eyeDraw)
 
-        # Faint bloom into the 6px canvas margin. Costs no eye size because the
-        # sclera below still draws at its normal 6,6,116,116.
-        $bloom = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(30, $eyeDraw.R, $eyeDraw.G, $eyeDraw.B))
-        for ($gi = 0; $gi -lt 4; $gi++) {
-            $gr = 64.0 - ($gi * 1.2)
-            $g.FillEllipse($bloom, [float](64.0 - $gr), [float](64.0 - $gr), [float]($gr * 2), [float]($gr * 2))
+            # halo in the canvas margin, outside the eye (the eye keeps its size)
+            $haloBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb([int](70 * $beat), [int]$hr, [int]$hg, [int]$hb))
+            for ($gi = 0; $gi -lt 4; $gi++) {
+                $gr = 64.0 - ($gi * 1.2)
+                $g.FillEllipse($haloBrush, [float](64.0 - $gr), [float](64.0 - $gr), [float]($gr * 2), [float]($gr * 2))
+            }
+            $haloBrush.Dispose()
         }
-        $bloom.Dispose()
     }
 
     # A. Draw Sclera (Base Eye Background)
