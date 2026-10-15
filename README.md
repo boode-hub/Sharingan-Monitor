@@ -30,13 +30,16 @@
 
 ## <img src="docs/stage-1.png" width="26" align="top"> Download and install
 
-*Three steps to awaken it. Never used GitHub before? Just follow along.*
+*Three steps to awaken it, and one double-click to have it start with Windows. Never used GitHub before? Just follow along.*
 
 <p align="center">
-  <img src="docs/download-install.gif" width="900" alt="Code, Download ZIP, Extract All, Run with PowerShell, and the eye in the tray">
+  <img src="docs/download-install.gif" width="900" alt="Download from Code or Releases, extract, run, start with Windows, restart, and remove from startup">
 </p>
 
-1. Click the green **Code** button near the top of this page, then **Download ZIP**.
+1. **Download** it either way:
+   - the green **Code** button near the top of this page, then **Download ZIP**, or
+   - [**Releases**](https://github.com/boode-hub/Sharingan-Monitor/releases/latest), then `Sharingan-Tray-Monitor-v2.0.zip`
+     (just the five files you need).
 2. Right-click the downloaded ZIP, choose **Extract All**, and pick any folder.
 3. Open that folder, right-click **Sharingan.ps1**, and choose **Run with PowerShell**
    (on Windows 11 it may sit under **Show more options**).
@@ -45,16 +48,23 @@ The eye appears in your system tray straight away. Right-click it for the menu.
 
 > [!CAUTION]
 > A PowerShell window opens with it. Minimise it, don't close it: closing it closes
-> the eye. To run it hidden, use **start at login** below.
+> the eye. To run it hidden, let it start with Windows (below).
 
 > [!TIP]
 > **If Windows blocks it:** right-click the ZIP *before* extracting, choose
 > **Properties**, tick **Unblock**, then extract. Windows flags files downloaded from
 > the internet, and this clears that flag.
 
-**Start it automatically at login (hidden):** double-click `install-startup.bat`.
-Undo it any time with `remove-startup.bat`, which also stops the running instance.
-Neither needs administrator rights.
+### Start with Windows, remove any time
+
+| Double-click | What it does |
+| --- | --- |
+| `install-startup.bat` | Starts the eye now, hidden, and every time you log in. |
+| `remove-startup.bat` | Takes it out of startup and stops it. Your settings stay. |
+
+No installer and no administrator rights: it adds one per-user startup entry, and
+`remove-startup.bat` deletes it again. Outside its own folder nothing else changes,
+so trying it is risk-free.
 
 **Prefer the command line?**
 
