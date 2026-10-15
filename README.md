@@ -38,8 +38,8 @@
 
 1. **Download** it either way:
    - the green **Code** button near the top of this page, then **Download ZIP**, or
-   - [**Releases**](https://github.com/boode-hub/Sharingan-Monitor/releases/latest), then `Sharingan-Tray-Monitor-v2.0.zip`
-     (just the five files you need).
+   - [**Releases**](https://github.com/boode-hub/Sharingan-Monitor/releases/latest), then the
+     `Sharingan-Tray-Monitor-vX.X.zip` of the latest version (just the five files you need).
 2. Right-click the downloaded ZIP, choose **Extract All**, and pick any folder.
 3. Open that folder, right-click **Sharingan.ps1**, and choose **Run with PowerShell**
    (on Windows 11 it may sit under **Show more options**).
@@ -167,7 +167,8 @@ The interesting parts, if you want to read the source:
 - **The morph**: load maps to a target stage, and the current stage eases toward it
   every frame. That easing is why the eye flows between stages.
 - **Rendering**: every frame draws a fresh 128×128 bitmap with GDI+. The tomoe shape
-  is traced from reference artwork; Classic blades are runs of overlapping circles.
+  is traced from reference artwork, and each Classic Mangekyou is a set of outlines
+  traced from its design, stored in the script as a few hundred bytes.
 - **The tray pipeline**: a WinForms `Timer` under a real message pump at ~28 fps,
   disposing the previous icon and calling `DestroyIcon` every frame. Skipping that
   leaks GDI handles until the process dies.
