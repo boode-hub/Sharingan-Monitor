@@ -1,30 +1,36 @@
-# Sharingan Tray Monitor
+<p align="center">
+  <img src="docs/hero.gif" width="900" alt="The Sharingan tray icon awakening from dormant to Mangekyou as CPU load climbs">
+</p>
 
-[![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078D6?style=flat-square&logo=windows&logoColor=white)](#requirements)
-[![PowerShell](https://img.shields.io/badge/PowerShell-5.1-5391FE?style=flat-square&logo=powershell&logoColor=white)](#requirements)
-[![License](https://img.shields.io/badge/license-MIT-green?style=flat-square)](LICENSE)
-[![Buy me a coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=flat-square&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/boode)
+<p align="center">
+  <a href="#requirements"><img src="https://img.shields.io/badge/Windows-10%20%7C%2011-C30000?style=for-the-badge&logo=windows&logoColor=white" alt="Windows 10 | 11"></a>
+  <a href="#requirements"><img src="https://img.shields.io/badge/PowerShell-5.1-8B0000?style=for-the-badge&logo=powershell&logoColor=white" alt="PowerShell 5.1"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-5C0000?style=for-the-badge" alt="MIT license"></a>
+  <a href="https://buymeacoffee.com/boode"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-E01B1B?style=for-the-badge&logo=buy-me-a-coffee&logoColor=white" alt="Buy me a coffee"></a>
+</p>
 
-An animated Sharingan that lives in your Windows system tray and reacts to real
-system load. The eye awakens as your machine works harder — one tomoe, then two,
-then three, then Mangekyou — and spins faster the heavier the load.
+<p align="center">
+  An animated Sharingan that lives in your Windows system tray and reacts to real system load.<br>
+  The eye awakens as your machine works harder: one tomoe, then two, then three, then Mangekyou.<br>
+  <b>Pure PowerShell.</b> No installer, no dependencies, no compiled binaries. One script you can read top to bottom.
+</p>
 
-Pure PowerShell. No installer, no dependencies, no compiled binaries, nothing to
-trust. One script you can read top to bottom.
-
-## Download and install
+## <img src="docs/stage-1.png" width="26" align="top"> Download and install
 
 Nothing to compile and no installer. Never used GitHub before? Just follow along:
 
 <p align="center">
-  <img src="docs/download-install.gif" width="800" alt="Downloading the ZIP from GitHub and running the script">
+  <img src="docs/download-install.gif" width="900" alt="Code, Download ZIP, Extract All, Run with PowerShell, and the eye in the tray">
 </p>
 
 1. Click the green **Code** button near the top of this page, then **Download ZIP**.
 2. Right-click the downloaded ZIP, choose **Extract All**, and pick any folder.
-3. Open that folder, right-click **Sharingan.ps1**, and choose **Run with PowerShell**.
+3. Open that folder, right-click **Sharingan.ps1**, and choose **Run with PowerShell**
+   (on Windows 11 it may sit under **Show more options**).
 
 The eye appears in your system tray straight away. Right-click it for the menu.
+A PowerShell window opens with it: minimise it, because closing it closes the eye.
+To run it hidden, use the start-at-login option below.
 
 > **If Windows blocks it:** right-click the ZIP *before* extracting, choose
 > **Properties**, tick **Unblock**, then extract. Windows flags files downloaded
@@ -41,21 +47,21 @@ powershell -ExecutionPolicy Bypass -File Sharingan.ps1
 Double-click `install-startup.bat`. Undo it any time with `remove-startup.bat`,
 which also stops the running instance. Neither needs administrator rights.
 
-## How it reacts
+## <img src="docs/stage-2.png" width="26" align="top"> How it reacts
 
-| CPU / RAM load | Eye |
-| --- | --- |
-| below 15% | dormant — no tomoe |
-| 15% | 1 tomoe |
-| 35% | 2 tomoe |
-| 55% | 3 tomoe |
-| 75% | Mangekyou |
+| CPU / RAM load | | Eye |
+| --- | :---: | --- |
+| below 15% | <img src="docs/stage-0.png" width="36"> | dormant, no tomoe |
+| 15% | <img src="docs/stage-1.png" width="36"> | 1 tomoe |
+| 35% | <img src="docs/stage-2.png" width="36"> | 2 tomoe |
+| 55% | <img src="docs/stage-3.png" width="36"> | 3 tomoe |
+| 75% | <img src="docs/stage-4.png" width="36"> | Mangekyou |
 
 Every threshold is adjustable. Stages blend smoothly rather than snapping — the
 morph is a floating-point value and every element scales off it, so the eye grows
 into each stage instead of popping.
 
-## Using it
+## <img src="docs/stage-3.png" width="26" align="top"> Using it
 
 Right-click the tray icon:
 
@@ -84,16 +90,18 @@ the eye is spinning, their tails stretch into long arms, and those arms become
 the Mangekyou.
 
 <p align="center">
-  <img src="docs/customize.gif" width="420" alt="Walking through the Customize menu: thresholds, colour, speed, shuffle and glow">
+  <img src="docs/customize.gif" width="900" alt="Using the tray menu: switching eye, colour, speed, glow, then reset">
   <br>
   <em>Every setting lives in the tray menu, no separate settings window.</em>
 </p>
 
-## The eyes
+## <img src="docs/stage-4.png" width="26" align="top"> The eyes
 
-**Classic** - drawn in code: Itachi · Obito · Kakashi · Madara · Izuna · Sasuke ·
-Shisui · Indra · Shin · Sarada · Naka · Baru · Rai · Naori · Fugaku · Nanashi ·
-Madara Eye 2 · Sasuke Eye 2
+**Classic**: 18 eyes, all drawn in code.
+
+<p align="center">
+  <img src="docs/eyes.png" width="900" alt="The 18 Classic eyes at full Mangekyou">
+</p>
 
 **V1** - drawn from artwork you supply in an `eyes\` folder next to the script
 (the expected file names are in `$global:EyeFiles` in the script). V1 shows up
@@ -129,7 +137,7 @@ This is free and always will be — every feature, no paywalls, no nags.
 
 If it made your taskbar better and you'd like to say thanks:
 
-<a href="https://buymeacoffee.com/boode"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-FFDD00?style=for-the-badge&logo=buy-me-a-coffee&logoColor=black" alt="Buy me a coffee"></a>
+<a href="https://buymeacoffee.com/boode"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-E01B1B?style=for-the-badge&logo=buy-me-a-coffee&logoColor=white" alt="Buy me a coffee"></a>
 
 Entirely optional, and it changes nothing about the software.
 
