@@ -1,0 +1,11 @@
+name: Eye or feature request
+description: A new eye to draw, or an idea for the tray app.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: Which eye (a reference picture helps) or what the feature should do.
+    validations:
+      required: true

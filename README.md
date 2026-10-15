@@ -15,9 +15,22 @@
   <b>Pure PowerShell.</b> No installer, no dependencies, no compiled binaries. One script you can read top to bottom.
 </p>
 
+<p align="center">
+  <a href="#download"><b>Download</b></a> &nbsp;&bull;&nbsp;
+  <a href="#how-it-reacts"><b>How it reacts</b></a> &nbsp;&bull;&nbsp;
+  <a href="#using-it"><b>Using it</b></a> &nbsp;&bull;&nbsp;
+  <a href="#the-eyes"><b>The eyes</b></a> &nbsp;&bull;&nbsp;
+  <a href="#how-it-works"><b>How it works</b></a> &nbsp;&bull;&nbsp;
+  <a href="#support"><b>Support</b></a>
+</p>
+
+<p align="center"><img src="docs/divider.png" width="900" alt=""></p>
+
+<a id="download"></a>
+
 ## <img src="docs/stage-1.png" width="26" align="top"> Download and install
 
-Nothing to compile and no installer. Never used GitHub before? Just follow along:
+*Three steps to awaken it. Never used GitHub before? Just follow along.*
 
 <p align="center">
   <img src="docs/download-install.gif" width="900" alt="Code, Download ZIP, Extract All, Run with PowerShell, and the eye in the tray">
@@ -29,12 +42,19 @@ Nothing to compile and no installer. Never used GitHub before? Just follow along
    (on Windows 11 it may sit under **Show more options**).
 
 The eye appears in your system tray straight away. Right-click it for the menu.
-A PowerShell window opens with it: minimise it, because closing it closes the eye.
-To run it hidden, use the start-at-login option below.
 
+> [!CAUTION]
+> A PowerShell window opens with it. Minimise it, don't close it: closing it closes
+> the eye. To run it hidden, use **start at login** below.
+
+> [!TIP]
 > **If Windows blocks it:** right-click the ZIP *before* extracting, choose
-> **Properties**, tick **Unblock**, then extract. Windows flags files downloaded
-> from the internet, and this clears that flag.
+> **Properties**, tick **Unblock**, then extract. Windows flags files downloaded from
+> the internet, and this clears that flag.
+
+**Start it automatically at login (hidden):** double-click `install-startup.bat`.
+Undo it any time with `remove-startup.bat`, which also stops the running instance.
+Neither needs administrator rights.
 
 **Prefer the command line?**
 
@@ -42,12 +62,18 @@ To run it hidden, use the start-at-login option below.
 powershell -ExecutionPolicy Bypass -File Sharingan.ps1
 ```
 
-**Want it to start automatically when you log in?**
+<p align="center">
+  <sub>The eye is open? If it made you smile, a coffee keeps new eyes coming.</sub><br>
+  <a href="https://buymeacoffee.com/boode"><img src="docs/coffee.png" height="48" alt="Buy me a coffee"></a>
+</p>
 
-Double-click `install-startup.bat`. Undo it any time with `remove-startup.bat`,
-which also stops the running instance. Neither needs administrator rights.
+<p align="center"><img src="docs/divider.png" width="900" alt=""></p>
+
+<a id="how-it-reacts"></a>
 
 ## <img src="docs/stage-2.png" width="26" align="top"> How it reacts
+
+*Load is chakra. The harder your machine works, the further the eye awakens.*
 
 | CPU / RAM load | | Eye |
 | --- | :---: | --- |
@@ -57,20 +83,28 @@ which also stops the running instance. Neither needs administrator rights.
 | 55% | <img src="docs/stage-3.png" width="36"> | 3 tomoe |
 | 75% | <img src="docs/stage-4.png" width="36"> | Mangekyou |
 
-Every threshold is adjustable. Stages blend smoothly rather than snapping — the
-morph is a floating-point value and every element scales off it, so the eye grows
-into each stage instead of popping.
+Every threshold is adjustable. Stages blend instead of snapping: the eye grows into
+each one, and it spins faster the heavier the load. Past the last threshold the three
+tomoe swirl in the direction of the spin, their tails stretch into long arms, and
+those arms become the Mangekyou.
+
+<p align="center"><img src="docs/divider.png" width="900" alt=""></p>
+
+<a id="using-it"></a>
 
 ## <img src="docs/stage-3.png" width="26" align="top"> Using it
 
-Right-click the tray icon:
+*Every technique lives in the tray menu. Right-click the eye.*
+
+<p align="center">
+  <img src="docs/customize.gif" width="900" alt="Using the tray menu: switching eye, colour, speed, glow, then reset">
+</p>
 
 ```
 Swap to RAM Tracking       toggle between CPU and RAM
-Eyes                    >  Classic  >  the hand-drawn eyes
-                        |  V1       >  the artwork eyes (when eyes\ is present)
+Eyes                    >  the Classic eyes (and V1, see below)
 Customize               >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
-                        |  Color       >  10 presets + full colour picker
+                        |  Color       >  11 presets + full colour picker
                         |  Speed       >  slider, 0 (paused) to 100
                         |  Direction   >  clockwise / counter-clockwise
                         |  Invert Colors  swap tomoe and eye colour
@@ -82,64 +116,67 @@ Buy me a coffee            opens the support page in your browser
 Exit
 ```
 
-Everything applies live. Settings persist to `settings.json` next to the script.
-A profile is the same settings in one small JSON file under `profiles\`.
+Everything applies live and is saved to `settings.json` next to the script. A
+profile is the same settings in one small JSON file under `profiles\`. Hover the eye
+for a one-line readout such as `Itachi - CPU 42%`.
 
-When load climbs past the last threshold the three tomoe swirl in the direction
-the eye is spinning, their tails stretch into long arms, and those arms become
-the Mangekyou.
+<p align="center"><img src="docs/divider.png" width="900" alt=""></p>
 
-<p align="center">
-  <img src="docs/customize.gif" width="900" alt="Using the tray menu: switching eye, colour, speed, glow, then reset">
-  <br>
-  <em>Every setting lives in the tray menu, no separate settings window.</em>
-</p>
+<a id="the-eyes"></a>
 
 ## <img src="docs/stage-4.png" width="26" align="top"> The eyes
 
-**Classic**: 18 eyes, all drawn in code.
+*Eighteen eyes, every one drawn in code. Each spins and grows out of nothing.*
 
 <p align="center">
   <img src="docs/eyes.png" width="900" alt="The 18 Classic eyes at full Mangekyou">
 </p>
 
-**V1** - drawn from artwork you supply in an `eyes\` folder next to the script
-(the expected file names are in `$global:EyeFiles` in the script). V1 shows up
-in the menu only for the eyes whose file is present; with no `eyes\` folder the
-menu simply lists the Classic eyes.
+**Classic** is built in. **V1** draws eyes from artwork you supply in an `eyes\`
+folder next to the script (the expected file names are in `$global:EyeFiles`). V1
+shows up in the Eyes menu only for the eyes whose file is present; with no `eyes\`
+folder the menu simply lists the Classic eyes. Shuffle stays within the set you are on.
 
-Every eye rotates and grows out of nothing as the stage builds, and shuffle stays
-within the set you are on.
+<p align="center"><img src="docs/divider.png" width="900" alt=""></p>
+
+<a id="requirements"></a>
 
 ## Requirements
 
 - Windows 10 or 11
-- Windows PowerShell 5.1 (ships with Windows — nothing to install)
+- Windows PowerShell 5.1 (ships with Windows, nothing to install)
+
+<a id="how-it-works"></a>
 
 ## How it works
 
 The interesting parts, if you want to read the source:
 
-- **Load sampling** — `PerformanceCounter("Processor", "% Processor Time", "_Total")`
+- **Load sampling**: `PerformanceCounter("Processor", "% Processor Time", "_Total")`
   for CPU, so the numbers match Task Manager, and `GlobalMemoryStatusEx` for RAM.
-- **The morph** — load maps to a target stage, and the current stage eases toward
-  it each frame. That easing is why the eye flows between stages.
-- **Rendering** — every frame draws a fresh 128×128 bitmap. Tomoe tails and
-  Mangekyou blades are runs of overlapping circles, which is crude but
-  anti-aliases beautifully.
-- **The tray pipeline** — a WinForms `Timer` under a real message pump at ~28fps,
-  disposing the previous icon and calling `DestroyIcon` on every frame. Skipping
-  that leaks GDI handles until the process dies.
+- **The morph**: load maps to a target stage, and the current stage eases toward it
+  every frame. That easing is why the eye flows between stages.
+- **Rendering**: every frame draws a fresh 128×128 bitmap with GDI+. The tomoe shape
+  is traced from reference artwork; Classic blades are runs of overlapping circles.
+- **The tray pipeline**: a WinForms `Timer` under a real message pump at ~28 fps,
+  disposing the previous icon and calling `DestroyIcon` every frame. Skipping that
+  leaks GDI handles until the process dies.
+
+<p align="center"><img src="docs/divider.png" width="900" alt=""></p>
+
+<a id="support"></a>
 
 ## Support
 
-This is free and always will be — every feature, no paywalls, no nags.
-
+This is free and always will be: every feature, no paywalls, no nags.
 If it made your taskbar better and you'd like to say thanks:
 
-<a href="https://buymeacoffee.com/boode"><img src="https://img.shields.io/badge/Buy%20me%20a%20coffee-E01B1B?style=for-the-badge&logo=buy-me-a-coffee&logoColor=white" alt="Buy me a coffee"></a>
+<p align="center">
+  <a href="https://buymeacoffee.com/boode"><img src="docs/coffee.png" height="58" alt="Buy me a coffee"></a>
+</p>
 
-Entirely optional, and it changes nothing about the software.
+Entirely optional, and it changes nothing about the software. A star on the repo
+helps other people find it too.
 
 ## Disclaimer
 
@@ -148,5 +185,12 @@ Masashi Kishimoto, Shueisha, TV Tokyo, or Viz Media.
 
 "Sharingan", "Mangekyou Sharingan" and the character names are the intellectual
 property of their respective owners. This project ships **no** artwork, audio or
-other assets from any Naruto work — every graphic is generated at runtime by the
+other assets from any Naruto work: every graphic is generated at runtime by the
 drawing code in this repository. The code is MIT licensed; see `LICENSE`.
+
+<p align="center"><img src="docs/divider.png" width="900" alt=""></p>
+
+<p align="center">
+  <img src="docs/stage-4.png" width="40" alt=""><br>
+  <sub>Made by <a href="https://github.com/boode-hub">boode</a> &nbsp;&bull;&nbsp; <a href="https://buymeacoffee.com/boode">Buy me a coffee</a> &nbsp;&bull;&nbsp; <a href="#readme">Back to top</a></sub>
+</p>
