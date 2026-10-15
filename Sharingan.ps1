@@ -1901,7 +1901,7 @@ $RenderFrame = {
     $modeText = if ($global:monitoringModeIsRAM) { "RAM" } else { "CPU" }
     $NotifyIcon.Icon = $iconObj.Icon
     $eyeParts = $global:selectedEyeStyle -split ':', 2
-    $NotifyIcon.Text = "Sharingan ($($eyeParts[1]), $($eyeParts[0]) - $modeText): $([Math]::Round($global:currentLoadPercent, 1))%"
+    $NotifyIcon.Text = "$($eyeParts[1]) - $modeText $([Math]::Round($global:currentLoadPercent))%"
 
     # Destroy the old icon objects to prevent GDI / system memory leaks
     if ($oldIcon -ne $null) {
