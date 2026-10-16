@@ -281,10 +281,10 @@ $global:rotationAngle = 0.0
 $global:EyeSets = [ordered]@{
     "Classic" = @("Itachi", "Obito", "Kakashi", "Madara", "Madara Eternal", "Izuna", "Sasuke",
         "Sasuke Eternal", "Shisui", "Indra", "Shin", "Sarada", "Naka", "Baru", "Rai", "Naori",
-        "Fugaku", "Nanashi")
+        "Fugaku", "Fugaku Eternal", "Nanashi")
     "V1"      = @("Itachi", "Kakashi/Obito", "Madara", "Madara Eternal", "Izuna", "Sasuke", "Sasuke Eternal",
         "Shisui", "Indra", "Shin", "Sarada", "Naka", "Baru", "Rai", "Naori", "Fugaku",
-        "Nanashi", "BOoD")
+        "Fugaku Eternal", "Nanashi", "BOoD", "BOoD2")
 }
 
 $global:EyesDir = Join-Path $PSScriptRoot "eyes"
@@ -295,7 +295,7 @@ $global:EyeFiles = @{
     "Sasuke Eternal" = "Sasuke-Eternal.png"; "Shisui" = "Shisui.svg"; "Indra" = "Indra.svg"
     "Shin" = "Shin.svg"; "Sarada" = "Sarada.svg"; "Naka" = "Naka.svg"; "Baru" = "Baru.svg"
     "Rai" = "Rai.svg"; "Naori" = "Naori.svg"; "Fugaku" = "Fugaku.svg"; "Nanashi" = "Nanashi.svg"
-    "BOoD" = "BOoD.png"
+    "Fugaku Eternal" = "Fugaku-Eternal.png"; "BOoD" = "BOoD.png"; "BOoD2" = "BOoD2.png"
 }
 $global:EyeSets["V1"] = @($global:EyeSets["V1"] | Where-Object { Test-Path (Join-Path $global:EyesDir $global:EyeFiles[$_]) })
 if ($global:EyeSets["V1"].Count -eq 0) { $global:EyeSets.Remove("V1") }
@@ -1229,7 +1229,7 @@ function Import-RasterEye([string]$path) {
 
 # 4c. Eye artwork loader. The files are listed in $global:EyeFiles (section 2).
 # If a V1 file is missing or unreadable, that eye falls back to a hand-drawn one.
-$global:ArtFallback = @{ "Kakashi/Obito" = "Kakashi"; "BOoD" = "Itachi" }
+$global:ArtFallback = @{ "Kakashi/Obito" = "Kakashi"; "BOoD" = "Itachi"; "BOoD2" = "Itachi" }
 $script:EyeArtCache = @{}
 
 # Classic eyes: each Mangekyou pattern traced from its V1 design into outlines in
@@ -1252,6 +1252,7 @@ $global:ClassicShapes = @{
     'Rai' = 'AKpcA1UQUBpNI0oxSEBIUUllTHZSiVGAUnVVbVllX19iW2hXbVV1U39Rf1CARYM8iTCOJpQfmxakDqoJrQeuCK0JpQ+cGJQhjiqKMoU+gkeAUIFRh1KLUJNPo06yTr9QzlLfV+9b/WH/av9x/4D/jv+V/Z/1ku+K6oPfedFvxWe8YrJeoFeVVY9Ul1eeXKNhp2epa6tvrXaugK2HrIurj6iWsp65psCwxrrLx8/R0dzR4dHi0OPQ4c7XzM3HwcK3vKu4p7CeqJeknaKioKiZtpLBiNB93nDrZPVc+1f6Tvc/8DbqMOYl3CzcN9tH2lbVZs9ty3bGhruQspqonqKZp5Crh619rnitc6xsqWioYKFcnleXTZxAnjefKp8dnhGcB5gBlAKTBZULlxKaGJsjnS+eO55EnEyaV5ZUkE2KSYNDezpoNl8wTyxCKDMmIzAaNhU/D04IACR8U3NVbldqWGJeXmJYalduVXNTfFODVIlVjFiVXZxjomqnc6p8rIOsjaqVp5yiopynlaiSqoysg6x8qnOnaqJjnV2WWY1VhVMAG4Btg26Hb4tyjnWQeJF7koCRho+KjIyHkIOSgJJ8knmRdY5xim+HboRtgG58b3hydHVxeG98bg=='
     'Naori' = 'AJyXAKEDrwe9DsYTzxrZIuIr6jbwQPZL+lf+ZP9x/4D/i/6Y/KL7lvqL9oDwdexs5mTdXNlZ1VfTWJV6loCWg5SJk4uRj46Si5OHlYbYhtuH3YrgjeOS5ZbmnOak56/mvuTK39ba4tLd2dbgyeq98bT2qvqb/pL/if+A/3b/Z/5e/FX6S/ZC8TnsMOYp4CTbJNou3zjjQ+ZQ51nnXuZp5XHidt543XmVdZRxkm+Pa4priGqEaYBpei5XLFcqVyZYIlseXhlkEm0OeAqBB5IGngarBagCnQCUAIkAgAB2AWcDXgVVCUsOQhc0Gy4iJikfMBo2FT8PTghXBV8CXwNSDEsSRBo9JDcuMzsxRTJJM0twb3Jtdmt7aoBph2qKa45uj27MTM1JzkPOPs06yjHEJrwdsRKoDKMHlgE='
     'Fugaku' = 'AFwwLzYvPTBEMk01VzhlQXBIe1CBUIlRkVSXV55cpGGpaq1zsnW3dr52x3XRcdhs4GbnXu9U9Ur1TfNW8F7tY+lo43Heddd8z4HEiLmNq5Snm6GgnqSXqJOrja2Fr3yvc65vsWu1aLtlw2TKZNVm4WnrbvZz/2/9afZl8mHqXuRb3FjUV81XxFe3V6tZnFWUU45Rh1CAUXZUbFhlXl9eWl1XWlFWSk9ES0FEPjg5LjchNRY1GzMiMSkvABu9RMNFxkfIScpLzE7NUM5VzFvKX8dhw2O9ZLpkt2O0YbJfsF2vWq5XrVSuUa9OsUuzSLhFu0QAFztQPlBCUUVTSFZKWUtgS2RIakVsQm4+bztvN28xbC5pLWYsYCxdLVkvVjFUNlEAIX1UeFVzVmpZZF5eZFlqVnNUelSDVoxZlF6bZKFrpnOpfKuDq4yplaaboqCdppWpjKuDq3ypc6ZroWSbXpRYjFaFVAAfgGmEaolrjGyQb5NzlHaVe5aAlYWUiZKMj5GLk4mUg5aAlnqVdpRzk3CQbYxriWqEaYBqeGt1bnFxbnZre2oAGYa7ibuMvJG/k8GUxZbLlNGT1JDXjdmK24bbg9uA2nzXedR30XbLdsd3xHnBfL6AvIO7'
+    'Fugaku Eternal' = 'AECAAIsAmAGkBLEIvQ7JFdQd3CXmMOw58UL3Tvtb/mf/dP+A/4v+mPuk+K/xvezG5s/d2dTiyeq98bH3pPuY/ov/gP90/2f+W/tO90LxNuor4iPaGs8Txg69CLEEpAGYAIsAgAB0AWcEWwdQDkITORowIiYrHTYVQg5OCFsEZwF0AAA1dwBpAlwFUwdEDjsTLhwoIh4uGDUPQgpNBVcCZgBxAH4Ahgd/DXkUdRtwJGspajJnPWRBXUNXS05OS1dEW0JiPmc8bjl5OIo4jjSTMJYvmy6eLqMuqC+sMa0wsCiyHbITsgyxCaUFlgKIAAAUgA6FD4kRixWNGY0bjCGKI4klhSiAKXkndSRzIXIbcxZ1E3USeA96DwAyug+8FL0dvya/Lr82vUC5VL1bwWLFbMZyx3rHhcaNxJe+orirurK7trq7ub+3xLTIrs6w0bLUutvD4M3l1t3d1ubM77/1svqk/Zb/h/97/3X8ZPhU9EzwQ+g33irTH80axRS8DwAbejpyPGk+XUNXSE9OSFdCX0FjQWRHZUxmUGlVbFdnXGFhXGZYbFV1Un5RhVGDSYRFhUCHO4Q6ABeeO5k8lj6UQJJEkkmSTJJOlFKWVJpWnlelVqhUqlGsTq1MrUmtRaxDqkKoPqQ8ABy3V7Rbr2CqYqZkqmysc654roCuh6yOqJamm6uer5+yo7eovKG+nMGUxIrFhsWAxXrEdcFqvV+4VwAXPnI6czh1NXgzfTOAM4M1hzeKOYs9jUONR4xJikyHToJOgE59TXlMdkh0RXNDcgAVfnJ6c3d0dHhyfXKDdYl2inmMfo2DjYWMiYqLh42CjX6MeYp2iXWFc4FyADckgB+AGIIShQqKAZAClgSgB6wOuxTFG9Ai1y7jOOpD8Ez1XPps/nf/f/+H/5L+mP2k+q33uPLF68Xqu+ix5aPdndmU0orHiceEx3jHccZlwmDAWLxTuE60SK1CpT2bNpkyly+VLJIpjieKJYUlgAAfVJNQlkqZRptBm0GcQ6FIqEyuUrNXt128Zr9rwXXEesWExYfEhb+Eu4O2ha+EroCuda1vq2ioYqRdnliYVpQAFyijLqQyqDWrNq82sTayNbYyujC8Lr0oviO9ILweuhu1GrMasRquG6seqCCmI6QAEtWj26Tfp+Kr463jseK237rbvdW+0L3MvMq5yLbHsciry6jQpAAWnqiYqZarlK2SsZG2kryUvpXAl8Kbw5/EosSlw6jBqr6svK22rLGprKSpoKg='
     'Nanashi' = 'AEeAAIUAiQCMBJAJlA+bHZ4mojWqOLY9w0XKS9NT2VreYeRr6HPtgPCM85n1pPat9bT0t+3F6sfnx+DJ0Mi/x6/Dp8qe0JLXi9qC3Hrec+Bq4WPhXOFR4EneO9so1B3PFckNvA22D7EQrRSmGp4kki2ILH0rdStkLF0uUjNDODg8MUEsSSFYEWQHbANxAHYAAF1xLmsvZjFhNFc4UDxLQUNIQks9UDlXN1wzZTFrL3UuhC6GN4BBd1JuW2tkZ2tlcWRpa191VYBOiUmSRZ1CqEGvQbRDuEi9TsFXx2HMa8910YPRidCUzpvLpMetw569lLiKsoKseqVznm+acJp7noaikKSbpqOmsaW9osWfzJzNms+V0YzRg9F90XTPastgxlfBUL1MtEKsPKM3ojelQ6ZMpl+lZqNyoHyegJ10mWaVWpBQikWCPHk0cy8AH4Brg2uHbIxvjnGQdJN5lHyUgJSDkomQjI2PipKHk4OUgJR8lHiTdZFyjm+LbIdrg2uAa3xseHBzc3B3bXtr'
     'Madara Eternal' = 'AE6AC4cMig6SEZ8WqRqyIbckvSrHMtsm3CXmMOo28D/3Tvxc4mvkeOWC5Zfnn+mo6LDmtOW44r3bxNbHzNDC1rPdqeGf5J79lf+O/4D/cf9q/2H9YN5Q2UXTOMsvySjHI8IdvRq2GLEXrBeoFJsTkROIFH0XchpqA1wITg8/FTYaMCMlJCY8ND40RS5LKlQkYRxiG2YXbBFzDnUNegwAIH4aehp1G3MdbyFtJGsoayxrL2szbThwO3I9dUB6Qn1CgkKFQopAjD2POpI4lDOUMJQrlCiSJI8gjB2KHIUagRoAWFovVzBSNEk7P0U4UDJbMGMvay9xMXU0fDiDPIdCiEeKS4tQkFSUVpdZnlqkW6har1i0V7hUvU/CTMVMx03JUMtZz2HRbdR41YDVhtWN05bQm8ygxqS/qLamsaWrpaeloaibqpWtkrGPtIu7ib+Hx4fPiNaK14nYhdh913XUatFhzVnHUL9Iu0W2QrJBrUCoQKJBm0KXRpNKjE2KToJPfU94T3JMbEpqSGVDYT5gOV0vAB+AZoVniWiNapJtlHGXdZh6mYCYhZeKlI6Rk46UipeFmICZeph2l3OVbpJrjmiKZ4VmgGd4aXRrb29rdGl6ZwAfN5QylS6WLJkpnCaeJKMkpySqJK0lsSi0K7guujK8Nr07vT69QrtFuUm1TLFMrU2oTKRMoEmdRplDlz6UOpQAHsWUwZS8l7ebtJ+zorKmsquyr7Syt7a6uL27wb3Evcm9zL3Ru9S417TZstut26vbp9qg15zUmdGXzpXKlA=='
     'Sasuke Eternal' = 'AECAAIsAmAGkBLEIvQ7JFdQd3CXmMOw58UL3Tvtb/mf/dP+A/4v+mPuk+K/xvezG5s/d2dTiyeq98bH3pPuY/ov/gP90/2f+W/tO90LxNuor4iPaGs8Txg69CLEEpAGYAIsAgAB0AWcEWwdQDkITORowIiYrHTYVQg5OCFsEZwF0AAARgAB+AXUPax5kLl8/YUBwRIBLkESfQKA/nC+UH4oNggKBAQAYIz4TPxJAEUEZUSJhLW82ejh8QHVHbT1lM1kqTixOOVBHVFNXVFdWTlhDV0JIQDc+ABfKPrdAqEKnQ6lMq1esV7pTxlDTTtVOzVrCZbhtwHXHfNNv3WHmU+9C7kDrP9w+AAleRFtNWFhZWV9ba1R4TWxIX0QACqFElEiHTZRUn1uhW6dZqFijSKJFAAmAUHFXZV6AaY1jml6ZXY5XgVEAGX9ufG53cHRzcXVue26AboNwh3GKdI12j3yRgJKEkYmPi42PiZGEkoCRe492jXSJcINuAAhLcUR2O4BGilCTUJJQhFB1AAm0cbB1sISvka+TuorEgLx2tXEACFZ6VYlXl2Kgb6hvp2uKYIIACap6oIGUipKakKeQqJ2gqZeqigAQOIMtkCKeGa4RvRK/EsAXwCbCOMFJv1i8WLtVrFGaRZAAEMeEu5Cumqurp7y4wMfB2sLqwO7A7r/uveev3p7TkMiEAAlXn1qtXbtfu2e4crRxrmKmV54ACaifnKePro20mLiiu6atqJ+ongAcjLqKx4bUgeCA4oDjetZ50XbIc7pyumq9YL9fwGTRbOJ08H79f/6A/oH+g/uL8JPim9GgwKC/lb0='
