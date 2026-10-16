@@ -136,10 +136,10 @@ for a one-line readout such as `Itachi - CPU 42%`.
 
 ## <img src="docs/stage-4.png" width="26" align="top"> The eyes
 
-*Nineteen eyes, every one drawn in code. Each spins and grows out of nothing.*
+*Twenty eyes, every one drawn in code. Each spins and grows out of nothing.*
 
 <p align="center">
-  <img src="docs/eyes.png" width="900" alt="The 19 Classic eyes at full Mangekyou">
+  <img src="docs/eyes.png" width="900" alt="The 20 Classic eyes at full Mangekyou">
 </p>
 
 **Classic** is built in. **V1** draws eyes from artwork you supply in an `eyes\`
