@@ -66,6 +66,14 @@ No installer and no administrator rights: it adds one per-user startup entry, an
 `remove-startup.bat` deletes it again. Outside its own folder nothing else changes,
 so trying it is risk-free.
 
+### Updating
+
+Right-click the eye and choose **Check for updates**. It only checks when you click
+it, never on its own. If a newer release exists it shows what's new and asks first.
+On yes it downloads the release, checks it against the SHA-256 GitHub publishes for
+it, swaps in the new files and restarts. Your settings, profiles and eyes stay as
+they are, and the replaced files are kept in `update-backup\`.
+
 **Prefer the command line?**
 
 ```
@@ -123,6 +131,7 @@ Customize               >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
                         |  Profiles    >  save / load a whole set of settings
                         |  Reset to Defaults
 Buy me a coffee            opens the support page in your browser
+Check for updates (v2.5)   looks for a newer release and installs it if you say yes
 Exit
 ```
 

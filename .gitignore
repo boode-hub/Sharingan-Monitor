@@ -21,3 +21,6 @@ profiles/
 # Eye artwork (third-party SVGs / pictures) - kept local, not published.
 # The app falls back to its built-in drawings when this folder is absent.
 eyes/
+
+# Backups the in-app updater keeps of the replaced files
+update-backup/

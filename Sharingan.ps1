@@ -265,6 +265,14 @@ $global:MenuFont = New-Object System.Drawing.Font("Segoe UI", 9.5)
 [System.Windows.Forms.ToolStripManager]::Renderer = New-Object SharinganMenuRenderer($global:MenuTheme)
 
 # 2. Global State Variables
+# The version of this build. Bump it with every release: "Check for updates"
+# compares it with the latest release tag (v2.5 -> 2.5).
+$global:AppVersion = [version]"2.5"
+$global:AppDir = $PSScriptRoot
+$global:UpdateApi = "https://api.github.com/repos/boode-hub/Sharingan-Monitor/releases/latest"
+$global:UpdateFiles = @("Sharingan.ps1", "install-startup.bat", "remove-startup.bat", "README.md", "LICENSE")
+$global:RestartAfterExit = $false
+
 $global:running = $true
 $global:monitoringModeIsRAM = $false       # False = CPU, True = RAM
 $global:currentLoadPercent = [Win32]::GetCPULoad()
@@ -274,7 +282,7 @@ $global:currentStage = 0.0                 # From 0.0 to 4.0
 $global:rotationAngle = 0.0
 
 # Two eye sets, both always built in:
-#   Classic - the original hand-drawn eyes
+#   Classic - built-in: outlines traced from the V1 designs (flat iris)
 #   V1      - drawn from the original artwork in .\eyes\ (offered only for the
 #             eyes whose file is there; with no eyes\ folder only Classic shows)
 # An eye is identified as "Set:Name", e.g. "V1:Itachi" or "Classic:Obito".
@@ -502,6 +510,7 @@ $ToggleItem = New-Object System.Windows.Forms.ToolStripMenuItem("Swap to RAM Tra
 $StyleItem = New-Object System.Windows.Forms.ToolStripMenuItem("Eyes")
 $CustomItem = New-Object System.Windows.Forms.ToolStripMenuItem("Customize")
 $SupportItem = New-Object System.Windows.Forms.ToolStripMenuItem("Buy me a coffee")
+$UpdateItem = New-Object System.Windows.Forms.ToolStripMenuItem("Check for updates (v$($global:AppVersion))")
 $ExitItem = New-Object System.Windows.Forms.ToolStripMenuItem("Exit")
 
 # Build the Sharingan style menu from the list above so the menu, the shuffle pool
@@ -530,6 +539,7 @@ $ContextMenu.Items.Add($StyleItem) | Out-Null
 $ContextMenu.Items.Add($CustomItem) | Out-Null
 $ContextMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 $ContextMenu.Items.Add($SupportItem) | Out-Null
+$ContextMenu.Items.Add($UpdateItem) | Out-Null
 $ContextMenu.Items.Add($ExitItem) | Out-Null
 $NotifyIcon.ContextMenuStrip = $ContextMenu
 
@@ -566,6 +576,81 @@ $SupportItem.add_Click({
         # One menu entry, opened only when clicked. No popups, no reminders -
         # the README promises no nags and this has to stay true to that.
         try { Start-Process "https://buymeacoffee.com/boode" } catch {}
+    })
+
+# --- Updates: manual only, nothing runs until "Check for updates" is clicked ---
+# Asks GitHub for the latest release. On a yes: download its zip, check it against
+# the SHA-256 GitHub publishes for it, check the new script parses, back up the
+# current files to update-backup\v<version>\, swap the app files in (put back if
+# a copy fails) and restart. settings.json, profiles\, eyes\ and launcher.vbs are
+# never touched.
+# ponytail: runs on the UI thread, so the eye pauses for the second or two this
+# takes; move it to a background runspace if slow networks make that annoying.
+function Get-LatestRelease {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $r = Invoke-RestMethod -Uri $global:UpdateApi -TimeoutSec 15 -UseBasicParsing -ErrorAction Stop `
+        -Headers @{ "User-Agent" = "Sharingan-Monitor"; "Accept" = "application/vnd.github+json" }
+    $v = $null
+    if (-not [version]::TryParse(([string]$r.tag_name -replace '^v', ''), [ref]$v)) { throw "Unrecognised release tag '$($r.tag_name)'." }
+    $asset = @($r.assets | Where-Object { $_.name -like "Sharingan-Tray-Monitor-v*.zip" }) | Select-Object -First 1
+    return @{ Version = $v; Notes = [string]$r.body; Asset = $asset }
+}
+
+function Install-Update($rel, [string]$dir) {
+    if (-not $rel.Asset) { throw "The release has no Sharingan-Tray-Monitor zip." }
+    if ([string]$rel.Asset.digest -notmatch '^sha256:([0-9a-fA-F]{64})$') { throw "GitHub gave no SHA-256 for the download, so it cannot be verified." }
+    $want = $Matches[1]
+    $tmp = Join-Path $env:TEMP ("sharingan-update-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory $tmp -ErrorAction Stop | Out-Null
+    try {
+        $zip = Join-Path $tmp "update.zip"
+        $pp = $ProgressPreference; $ProgressPreference = "SilentlyContinue"   # the progress bar makes 5.1 downloads crawl
+        try {
+            Invoke-WebRequest -Uri $rel.Asset.browser_download_url -OutFile $zip -UseBasicParsing -TimeoutSec 60 -ErrorAction Stop `
+                -Headers @{ "User-Agent" = "Sharingan-Monitor" }
+        }
+        finally { $ProgressPreference = $pp }
+        if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $want) { throw "The download does not match its published SHA-256." }
+        $x = Join-Path $tmp "x"
+        Expand-Archive -Path $zip -DestinationPath $x -ErrorAction Stop
+        $new = Join-Path $x "Sharingan.ps1"
+        if (-not (Test-Path $new)) { throw "The download has no Sharingan.ps1." }
+        $errs = $null
+        [void][System.Management.Automation.Language.Parser]::ParseFile($new, [ref]$null, [ref]$errs)
+        if ($errs.Count -gt 0) { throw "The downloaded Sharingan.ps1 does not parse." }
+        $bak = Join-Path $dir "update-backup\v$($global:AppVersion)"
+        New-Item -ItemType Directory $bak -Force -ErrorAction Stop | Out-Null
+        $files = @($global:UpdateFiles | Where-Object { Test-Path (Join-Path $x $_) })
+        foreach ($f in $files) { $cur = Join-Path $dir $f; if (Test-Path $cur) { Copy-Item $cur $bak -Force -ErrorAction Stop } }
+        try { foreach ($f in $files) { Copy-Item (Join-Path $x $f) (Join-Path $dir $f) -Force -ErrorAction Stop } }
+        catch {
+            foreach ($f in $files) { $b = Join-Path $bak $f; if (Test-Path $b) { Copy-Item $b (Join-Path $dir $f) -Force -ErrorAction SilentlyContinue } }
+            throw
+        }
+    }
+    finally { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+}
+
+# A tray app has no window to own a dialog; DefaultDesktopOnly brings the box to the front.
+function Show-UpdateMessage([string]$text, [string]$buttons = "OK", [string]$icon = "Information") {
+    return [System.Windows.Forms.MessageBox]::Show($text, "Sharingan Monitor",
+        [System.Windows.Forms.MessageBoxButtons]$buttons, [System.Windows.Forms.MessageBoxIcon]$icon,
+        [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly)
+}
+
+$UpdateItem.add_Click({
+        try { $rel = Get-LatestRelease }
+        catch { Show-UpdateMessage "Could not check for updates.`n`n$($_.Exception.Message)" "OK" "Warning" | Out-Null; return }
+        if ($rel.Version -le $global:AppVersion) { Show-UpdateMessage "You have the latest version (v$($global:AppVersion))." | Out-Null; return }
+        # the first paragraph of the release notes, without markdown
+        $notes = (($rel.Notes -split "\r?\n\s*\r?\n")[0] -replace '\*\*|`', '' -replace '\[([^\]]+)\]\([^)]+\)', '$1').Trim()
+        $q = "Version $($rel.Version) is available (you have v$($global:AppVersion)).`n`n$notes`n`n" +
+        "Update now? Your settings, profiles and eyes are kept, and the app restarts when it is done."
+        if ((Show-UpdateMessage $q "YesNo" "Question") -ne "Yes") { return }
+        try { Install-Update $rel $global:AppDir }
+        catch { Show-UpdateMessage "The update was not installed. Nothing was changed.`n`n$($_.Exception.Message)" "OK" "Error" | Out-Null; return }
+        $global:RestartAfterExit = $true
+        [System.Windows.Forms.Application]::ExitThread()             # section 7 starts the new version
     })
 
 $ExitItem.add_Click({
@@ -1668,5 +1753,16 @@ try { [IO.File]::Delete((Join-Path $PSScriptRoot "sharingan.pid")) } catch {}
 $NotifyIcon.Visible = $false
 if ($NotifyIcon.Icon -ne $null) { $NotifyIcon.Icon.Dispose() }
 $NotifyIcon.Dispose()
+
+# An update just replaced the files: start the new version, hidden. This runs after
+# the pid file is gone, so the new instance's own pid file is the one that stays.
+if ($global:RestartAfterExit) {
+    $vbs = Join-Path $global:AppDir "launcher.vbs"
+    try {
+        if (Test-Path $vbs) { Start-Process wscript.exe -ArgumentList "//nologo `"$vbs`"" }
+        else { Start-Process powershell.exe -WindowStyle Hidden -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$(Join-Path $global:AppDir 'Sharingan.ps1')`"" }
+    }
+    catch {}
+}
 
 Write-Output "Sharingan Monitor terminated cleanly."
