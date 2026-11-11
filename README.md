@@ -102,9 +102,10 @@ powershell -ExecutionPolicy Bypass -File Sharingan.ps1
 | 75% | <img src="docs/stage-4.png" width="36"> | Mangekyou |
 
 Every threshold is adjustable. Stages blend instead of snapping: the eye grows into
-each one, and it spins faster the heavier the load. Past the last threshold the three
-tomoe swirl in the direction of the spin, their tails stretch into long arms, and
-those arms become the Mangekyou.
+each one, and it spins faster the heavier the load. Past the last threshold the
+Mangekyou awakens in a few seconds you can follow: the three tomoe spin up, close in
+on the centre, merge into the central dot, and the Mangekyou rises out of it,
+unfolding from the centre outward. When the load drops it plays back the same way.
 
 <p align="center"><img src="docs/divider.png" width="900" alt=""></p>
 

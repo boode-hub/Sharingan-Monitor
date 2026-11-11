@@ -1419,6 +1419,60 @@ function Get-HeartBeat {
     return [Math]::Min(1.0, [Math]::Max($lub, $dub))
 }
 
+# Evolution from three tomoe to the Mangekyou (the owner's design). A timed
+# sequence instead of following the load's easing, so every phase can be seen:
+#   0.0-1.2 s  spin-up: the tomoe turn a little faster (1.0x -> 1.7x) on their ring
+#   1.2-2.8 s  converge: still spinning (-> 2.0x) they move in until they touch the
+#              central dot; the ring fades as they leave it
+#   2.8-3.3 s  merge: they sink into the dot, which swells as it takes them in
+#   3.3-5.5 s  emerge: the Mangekyou rises out of the dot - it unfolds from the
+#              centre outward, grows (35% -> 100%) and fades in, while the spin
+#              settles back (-> 1.0x)
+# Stage E runs 3 -> 4 over these 5.5 s while the load is at the Mangekyou threshold,
+# and plays back the same way when it drops (section 6).
+$global:EvolveSeconds = 5.5
+$global:EvolvePhase = @{ Spin = 1.2; Conv = 2.8; Merge = 3.3 }
+$global:EvolveSpinCap = 0.14           # rad per tick (~4 rad/s): the most the spin-up reaches
+function Get-Smooth([double]$x) { $x = [Math]::Max(0.0, [Math]::Min(1.0, $x)); return $x * $x * (3.0 - 2.0 * $x) }
+
+# Spin multiplier at sequence position u (0..1).
+function Get-EvolveSpin([double]$u) {
+    $t = $u * $global:EvolveSeconds; $ph = $global:EvolvePhase
+    if ($t -lt $ph.Spin) { return 1.0 + 0.7 * (Get-Smooth ($t / $ph.Spin)) }
+    if ($t -lt $ph.Merge) { return 1.7 + 0.3 * (($t - $ph.Spin) / ($ph.Merge - $ph.Spin)) }
+    return 2.0 - (Get-Smooth (($t - $ph.Merge) / ($global:EvolveSeconds - $ph.Merge)))
+}
+
+# Spin (rad per tick, magnitude) at sequence position u, starting from the speed the
+# eye had when the sequence began. A calm eye roughly doubles at the peak (up to
+# EvolveSpinCap); an eye already spinning fast rises only 15%, so it never blurs.
+function Get-EvolveRate([double]$base, [double]$u) {
+    $gain = 1.0
+    if ($base -gt 1e-6) { $gain = [Math]::Max(0.0, [Math]::Min(1.0, [Math]::Max($global:EvolveSpinCap, 1.15 * $base) / $base - 1.0)) }
+    return $base * (1.0 + ((Get-EvolveSpin $u) - 1.0) * $gain)
+}
+
+# What the eye shows at sequence position u (0..1), in the 128-px canvas.
+function Get-EvolveState([double]$u) {
+    $t = $u * $global:EvolveSeconds; $ph = $global:EvolvePhase
+    $st = @{ OrbitR = 35.0; TomoeK = 1.0; RingA = 1.0; PupilR = 14.0; PatK = 0.0; PatA = 0.0; Reveal = 0.0 }
+    if ($t -ge $ph.Spin) {                                     # in toward the dot, until they touch it
+        $c = Get-Smooth (($t - $ph.Spin) / ($ph.Conv - $ph.Spin))
+        $st.OrbitR = 35.0 - 19.0 * $c; $st.TomoeK = 1.0 - 0.3 * $c; $st.RingA = 1.0 - $c
+    }
+    if ($t -ge $ph.Conv) {                                     # into the dot, which swells
+        $m = Get-Smooth (($t - $ph.Conv) / ($ph.Merge - $ph.Conv))
+        $st.OrbitR = 16.0 * (1.0 - $m); $st.TomoeK = 0.7 * (1.0 - $m); $st.RingA = 0.0; $st.PupilR = 14.0 + 3.0 * $m
+    }
+    if ($t -ge $ph.Merge) {                                    # the Mangekyou unfolds from the centre
+        $e = [Math]::Min(1.0, ($t - $ph.Merge) / ($global:EvolveSeconds - $ph.Merge))
+        $eo = 1.0 - [Math]::Pow(1.0 - $e, 3)                   # quick start, gentle finish
+        $st.TomoeK = 0.0; $st.Reveal = 58.0 * $eo; $st.PatK = 0.35 + 0.65 * $eo
+        $st.PatA = Get-Smooth ($e / 0.45); $st.PupilR = 17.0 * (1.0 - (Get-Smooth ($e / 0.5)))
+    }
+    return $st
+}
+
 # 5. Sharingan Drawing Routine (128x128 High Resolution)
 # E: Current morph stage (0.0 to 4.0)
 # Angle: Rotation angle in radians
@@ -1433,21 +1487,9 @@ function Get-SharinganIcon($E, $Angle, $Style) {
     if ($null -eq $art -and $global:ArtFallback.ContainsKey($Style)) { $Style = $global:ArtFallback[$Style] }
     if ($null -eq $art) { $art = Get-ClassicArt $Style }
 
-    # Merge phase (E 3 -> 4): the three tomoe keep their orbit, swirl in the
-    # rotation direction and stretch their tails into long arms; those arms
-    # become the blades as the Mangekyou fades in underneath and the tomoe heads
-    # dissolve into it.
-    #   $conv  how far the tomoe have swirled / stretched    (0..1, eased)
-    #   $fade  1 -> 0 as the tomoe dissolve into the pattern (late in the merge)
-    #   $bloom how far the pattern has formed                (0..1, eased)
-    $mu = [Math]::Max(0.0, [Math]::Min(1.0, $E - 3.0))
-    $conv = $mu * $mu * (3.0 - 2.0 * $mu)
-    $fu = [Math]::Max(0.0, [Math]::Min(1.0, ($mu - 0.65) / 0.35))
-    $fade = 1.0 - ($fu * $fu * (3.0 - 2.0 * $fu))
-    $bu = [Math]::Max(0.0, [Math]::Min(1.0, ($mu - 0.15) / 0.85))
-    $bloom = $bu * $bu * (3.0 - 2.0 * $bu)
-    $spinDir = 1.0
-    if ($global:rotationDir -lt 0) { $spinDir = -1.0 }
+    # Stage 3 -> 4 is the evolution sequence (Get-EvolveState above).
+    $evo = $null
+    if ($E -gt 3.0) { $evo = Get-EvolveState ([Math]::Min(1.0, $E - 3.0)) }
 
     # 128x128 pixel double-resolution canvas
     $bmp = New-Object System.Drawing.Bitmap(128, 128)
@@ -1506,18 +1548,10 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $g.DrawEllipse($borderPen, 6, 6, 116, 116)
     }
 
-    # B. Draw Inner Ring (Fades in for tomoes, fades out for Mangekyou)
-    $ringAlpha = 0
-    if ($E -lt 1.0) {
-        $ringAlpha = [int]($E * 255)
-    }
-    elseif ($E -ge 1.0 -and $E -lt 3.0) {
-        $ringAlpha = 255
-    }
-    elseif ($E -ge 3.0 -and $E -le 4.0) {
-        $ringAlpha = [int]((4.0 - $E) * 255)
-    }
-    
+    # B. Draw Inner Ring (fades in with the first tomoe, out as they leave it)
+    $ringAlpha = 255
+    if ($E -lt 1.0) { $ringAlpha = [int]($E * 255) }
+    elseif ($evo) { $ringAlpha = [int]($evo.RingA * 255) }
     if ($ringAlpha -gt 0) {
         $ringColor = [System.Drawing.Color]::FromArgb($ringAlpha, 0, 0, 0)
         $ringPen = New-Object System.Drawing.Pen($ringColor, 3.2)
@@ -1525,26 +1559,48 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $ringPen.Dispose()
     }
 
-    # C. Draw Center Pupil. The design supplies its own centre, so the base pupil
-    # hands over to it as the pattern forms.
-    $pupilRadius = 14.0 * (1.0 - $bloom)
-    $g.FillEllipse($blackBrush, [float](64.0 - $pupilRadius), [float](64.0 - $pupilRadius), [float]($pupilRadius * 2), [float]($pupilRadius * 2))
-
-    # D. Mangekyou pattern
-    if ($art -and $bloom -gt 0.0) {
-        $artState = $g.Save()
-        $g.TranslateTransform(64.0, 64.0)
-        # starts 120 degrees behind and catches up in the spin direction as it forms
-        $unwind = -$spinDir * (1.0 - $bloom) * 120.0
-        $g.RotateTransform([float]($Angle * 180.0 / [Math]::PI + $unwind))
-        $s = 0.401 * (0.55 + 0.45 * $bloom)
-        $g.ScaleTransform([float]$s, [float]$s)
-        $g.TranslateTransform(-150.0, -150.0)
-        Write-ArtPattern $g $art $eyeDraw $bloom
-        $g.Restore($artState)
+    # C. Mangekyou pattern. While it emerges it is painted through a disc that grows
+    # from the centre, so it unfolds outward; fully formed it is drawn directly.
+    if ($art -and $evo -and $evo.PatA -gt 0.004 -and $evo.Reveal -gt 0.3) {
+        $k = $bmp.Width / 128.0                                  # 1 in the tray; larger for previews
+        $full = $evo.Reveal -ge 57.9
+        $pg = $g; $pb = $null
+        if (-not $full) {
+            $pb = New-Object System.Drawing.Bitmap($bmp.Width, $bmp.Height)
+            $pg = [System.Drawing.Graphics]::FromImage($pb)
+            $pg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+            $pg.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $pg.ScaleTransform([float]$k, [float]$k)
+        }
+        $artState = $pg.Save()
+        $pg.TranslateTransform(64.0, 64.0)
+        $pg.RotateTransform([float]($Angle * 180.0 / [Math]::PI))
+        $ps = 0.401 * $evo.PatK
+        $pg.ScaleTransform([float]$ps, [float]$ps)
+        $pg.TranslateTransform(-150.0, -150.0)
+        Write-ArtPattern $pg $art $eyeDraw $evo.PatA
+        $pg.Restore($artState)
+        if (-not $full) {
+            $pg.Dispose()
+            $tb = New-Object System.Drawing.TextureBrush($pb)
+            $tb.ScaleTransform([float](1.0 / $k), [float](1.0 / $k))
+            $r = $evo.Reveal
+            $g.FillEllipse($tb, [float](64.0 - $r), [float](64.0 - $r), [float](2.0 * $r), [float](2.0 * $r))
+            $tb.Dispose(); $pb.Dispose()
+        }
     }
 
-    # E. Draw Standard Tomoes (Stages 1, 2, 3)
+    # D. Center pupil: swells as the tomoe merge into it, then hands over to the
+    # design's own centre as the Mangekyou forms.
+    $pupilRadius = 14.0
+    if ($evo) { $pupilRadius = $evo.PupilR }
+    if ($pupilRadius -gt 0.2) {
+        $g.FillEllipse($blackBrush, [float](64.0 - $pupilRadius), [float](64.0 - $pupilRadius), [float]($pupilRadius * 2), [float]($pupilRadius * 2))
+    }
+
+    # E. Draw Standard Tomoes (Stages 1, 2, 3; in the sequence they converge and merge)
+    $tk = 1.0
+    if ($evo) { $tk = $evo.TomoeK }
     $t1_angle = 0.0
     $t1_scale = 0.0
     if ($E -le 1.0) {
@@ -1554,7 +1610,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $t1_scale = 1.0
     }
     else {
-        $t1_scale = $fade
+        $t1_scale = $tk
     }
 
     $t2_angle = [Math]::PI
@@ -1568,7 +1624,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $t2_angle = [Math]::PI - $interp * ([Math]::PI - (2 * [Math]::PI / 3))
     }
     elseif ($E -ge 3.0) {
-        $t2_scale = $fade
+        $t2_scale = $tk
         $t2_angle = 2 * [Math]::PI / 3
     }
 
@@ -1578,7 +1634,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $t3_scale = $E - 2.0
     }
     elseif ($E -gt 3.0) {
-        $t3_scale = $fade
+        $t3_scale = $tk
     }
 
     $tomoes = @(
@@ -1591,10 +1647,10 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $scale = $tomoe.Scale
         if ($scale -le 0.01) { continue }
 
-        # during the merge they swirl a half turn in the spin direction
-        $tomoeAngle = $Angle + $tomoe.Angle + ($spinDir * $conv * [Math]::PI)
-        $tomoeRadius = 35.0 * (1.0 + 0.08 * $conv)           # orbit holds, arms reach outward
-        $headRadius = 9.14 * $scale * (1.0 + 0.9 * $conv)    # heads fatten into blade tips
+        $tomoeAngle = $Angle + $tomoe.Angle
+        $tomoeRadius = 35.0
+        if ($evo) { $tomoeRadius = $evo.OrbitR }
+        $headRadius = 9.14 * $scale
 
         $hx = 64.0 + $tomoeRadius * [Math]::Cos($tomoeAngle)
         $hy = 64.0 + $tomoeRadius * [Math]::Sin($tomoeAngle)
@@ -1603,21 +1659,6 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         # the comma's tail, traced from the reference tomoe
         $tailPts = [SharinganTomoe]::Tail($global:TomoeA, $global:TomoeI, $global:TomoeO, $hx, $hy, $tomoeAngle, $headRadius)
         $g.FillPolygon($blackBrush, $tailPts)
-
-        # merge: an arm grows out of each tomoe along the orbit and becomes a blade
-        if ($conv -gt 0.0) {
-            $tailLength = 0.75 + 1.9 * $conv
-            $tailSteps = 30
-            for ($j = 0; $j -le $tailSteps; $j++) {
-                $tTail = $j / $tailSteps
-                $phi = $tomoeAngle + ($tTail * $tailLength * $scale)
-                $tw = $headRadius * [Math]::Pow(1.0 - $tTail, 1.5) * $conv
-                if ($tw -le 0.1) { continue }
-                $tx = 64.0 + $tomoeRadius * [Math]::Cos($phi)
-                $ty = 64.0 + $tomoeRadius * [Math]::Sin($phi)
-                $g.FillEllipse($blackBrush, [float]($tx - $tw), [float]($ty - $tw), [float]($tw * 2), [float]($tw * 2))
-            }
-        }
     }
 
     # F. Cover cleanup
@@ -1663,6 +1704,12 @@ $metricsInterval = 1000 # Query metrics every 1s
 $tickInterval = 35      # 35ms frame render rate (~28 FPS)
 $script:shuffleTimer = 0
 
+$script:LoopClock = [System.Diagnostics.Stopwatch]::StartNew()
+$script:LoopLast = 0.0
+$script:SpinRate = 0.0
+$script:InEvolve = $false
+$script:EvolveBase = 0.0
+
 # Let the uninstall batch file find and stop this instance.
 try { $PID | Set-Content -Path (Join-Path $PSScriptRoot "sharingan.pid") -Encoding ASCII } catch {}
 
@@ -1697,14 +1744,21 @@ $RenderFrame = {
         if ($global:currentLoadPercent -ge $global:thresholds[$s]) { $targetStage = $s + 1.0 }
     }
 
-    # Interpolate current stage towards target stage smoothly
-    $stageDiff = $targetStage - $global:currentStage
-    if ([Math]::Abs($stageDiff) -gt 0.01) {
-        $global:currentStage += $stageDiff * 0.12
+    # Stages 0..3 ease toward the load. 3 -> 4 is the evolution sequence: it runs
+    # forward in real time while the load is at the Mangekyou threshold and plays
+    # back the same way when it drops, so it never jumps.
+    $now = $script:LoopClock.Elapsed.TotalSeconds
+    $dt = [Math]::Min(0.25, $now - $script:LoopLast); $script:LoopLast = $now
+    $cs = $global:currentStage
+    if ($cs -ge 3.0 -and ($targetStage -ge 4.0 -or $cs -gt 3.0)) {
+        $step = $dt / $global:EvolveSeconds
+        if ($targetStage -ge 4.0) { $cs = [Math]::Min(4.0, $cs + $step) } else { $cs = [Math]::Max(3.0, $cs - $step) }
     }
     else {
-        $global:currentStage = $targetStage
+        $goal = [Math]::Min($targetStage, 3.0)
+        if ([Math]::Abs($goal - $cs) -gt 0.01) { $cs += ($goal - $cs) * 0.12 } else { $cs = $goal }
     }
+    $global:currentStage = $cs
 
     # Calculate rotation speed (spins faster under high load), scaled by the user multiplier
     $speedFactor = 0.01
@@ -1712,8 +1766,16 @@ $RenderFrame = {
         $speedFactor = 0.02 + ($global:currentLoadPercent / 100.0) * 0.26
     }
     $speedFactor *= $global:speedMult * $global:rotationDir
+    # during the evolution: the speed it had when the sequence began, shaped by the
+    # sequence (spin-up, faster while converging, settling as the Mangekyou forms)
+    $inEvolve = ($cs -gt 3.0 -and $cs -lt 4.0)
+    if ($inEvolve -and -not $script:InEvolve) { $script:EvolveBase = [Math]::Abs($script:SpinRate) }
+    $script:InEvolve = $inEvolve
+    if ($inEvolve) { $speedFactor = (Get-EvolveRate $script:EvolveBase ($cs - 3.0)) * $global:rotationDir }
+    # the spin glides to its new rate instead of jumping (into and out of the sequence)
+    $script:SpinRate += ($speedFactor - $script:SpinRate) * 0.1
 
-    $global:rotationAngle += $speedFactor
+    $global:rotationAngle += $script:SpinRate
     if ($global:rotationAngle -ge (2 * [Math]::PI)) {
         $global:rotationAngle -= (2 * [Math]::PI)
     }
