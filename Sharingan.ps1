@@ -315,7 +315,7 @@ $global:MenuFont = New-Object System.Drawing.Font("Segoe UI", 9.5)
 # 2. Global State Variables
 # The version of this build. Bump it with every release: "Check for updates"
 # compares it with the latest release tag (v2.5 -> 2.5).
-$global:AppVersion = [version]"2.6"
+$global:AppVersion = [version]"2.7"
 $global:AppDir = $PSScriptRoot
 $global:UpdateApi = "https://api.github.com/repos/boode-hub/Sharingan-Monitor/releases/latest"
 $global:UpdateFiles = @("Sharingan.ps1", "install-startup.bat", "remove-startup.bat", "README.md", "LICENSE")
@@ -703,11 +703,25 @@ function Install-Update($rel, [string]$dir) {
     finally { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-# A tray app has no window to own a dialog; DefaultDesktopOnly brings the box to the front.
+# A tray app has no window to own a dialog, and an ownerless box opens BEHIND the
+# window in front (DefaultDesktopOnly does not change that - tested: "Check for
+# updates" looked like it did nothing). So the box gets an invisible, topmost owner
+# in the middle of the screen the click came from: it opens on top of everything.
 function Show-AppMessage([string]$text, [string]$buttons = "OK", [string]$icon = "Information") {
-    return [System.Windows.Forms.MessageBox]::Show($text, "Sharingan Monitor",
-        [System.Windows.Forms.MessageBoxButtons]$buttons, [System.Windows.Forms.MessageBoxIcon]$icon,
-        [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly)
+    $area = [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position).WorkingArea
+    $owner = New-Object System.Windows.Forms.Form
+    $owner.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
+    $owner.ShowInTaskbar = $false
+    $owner.TopMost = $true
+    $owner.Opacity = 0
+    $owner.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
+    $owner.Bounds = New-Object System.Drawing.Rectangle(($area.X + $area.Width / 2), ($area.Y + $area.Height / 2), 1, 1)
+    try {
+        $owner.Show(); $owner.Activate()
+        return [System.Windows.Forms.MessageBox]::Show($owner, $text, "Sharingan Monitor",
+            [System.Windows.Forms.MessageBoxButtons]$buttons, [System.Windows.Forms.MessageBoxIcon]$icon)
+    }
+    finally { $owner.Close(); $owner.Dispose() }
 }
 
 $UpdateItem.add_Click({

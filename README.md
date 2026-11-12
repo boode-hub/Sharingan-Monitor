@@ -133,7 +133,7 @@ Customize               >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
                         |  Profiles    >  save / load a whole set of settings
                         |  Reset to Defaults
 Buy me a coffee            opens the support page in your browser
-Check for updates (v2.6)   looks for a newer release and installs it if you say yes
+Check for updates (v2.7)   looks for a newer release and installs it if you say yes
 Exit
 ```
 
