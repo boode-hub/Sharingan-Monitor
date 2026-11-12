@@ -24,3 +24,9 @@ eyes/
 
 # Backups the in-app updater keeps of the replaced files
 update-backup/
+
+# Runtime log and the atomic-save temp / broken-settings copies
+sharingan.log
+sharingan.log.old
+settings.json.tmp
+settings.json.bad

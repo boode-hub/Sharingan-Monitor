@@ -125,6 +125,7 @@ Eyes                    >  the Classic eyes (and V1, see below)
 Customize               >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
                         |  Color       >  11 presets + full colour picker
                         |  Speed       >  slider, 0 (paused) to 100
+                        |  Transition  >  how long the Mangekyou takes to awaken, 2.0 to 5.5 s
                         |  Direction   >  clockwise / counter-clockwise
                         |  Invert Colors  swap tomoe and eye colour
                         |  Shuffle     >  cycle eyes randomly, on a timer
@@ -132,7 +133,7 @@ Customize               >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
                         |  Profiles    >  save / load a whole set of settings
                         |  Reset to Defaults
 Buy me a coffee            opens the support page in your browser
-Check for updates (v2.5)   looks for a newer release and installs it if you say yes
+Check for updates (v2.6)   looks for a newer release and installs it if you say yes
 Exit
 ```
 

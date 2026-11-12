@@ -4,6 +4,35 @@
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 
+# One tray eye per user: a second start (Run with PowerShell while the startup copy
+# runs, or two double-clicks) leaves quietly. Skipped when the test and render tools
+# dot-source this file.
+if ($MyInvocation.InvocationName -ne '.') {
+    $script:InstanceMutex = New-Object System.Threading.Mutex($false, "Local\SharinganTrayMonitor")
+    $script:OwnsMutex = $false
+    try { $script:OwnsMutex = $script:InstanceMutex.WaitOne(0) }
+    catch [System.Threading.AbandonedMutexException] { $script:OwnsMutex = $true }   # the last one crashed
+    if (-not $script:OwnsMutex) { exit }
+}
+
+# An error never takes the tray icon down or floods the screen with "unhandled
+# exception" dialogs: it goes to sharingan.log next to the script instead, each
+# distinct message at most once a minute (the log rolls over at 256 KB).
+$global:LogPath = Join-Path $PSScriptRoot "sharingan.log"
+$script:LogSeen = @{}
+function Write-AppLog([string]$msg) {
+    try {
+        $now = Get-Date
+        if ($script:LogSeen.ContainsKey($msg) -and ($now - $script:LogSeen[$msg]).TotalSeconds -lt 60) { return }
+        $script:LogSeen[$msg] = $now
+        if ((Test-Path $global:LogPath) -and (Get-Item $global:LogPath).Length -gt 256KB) { Move-Item $global:LogPath "$global:LogPath.old" -Force }
+        Add-Content -Path $global:LogPath -Value ("{0:yyyy-MM-dd HH:mm:ss}  {1}" -f $now, $msg) -Encoding UTF8
+    }
+    catch { }
+}
+try { [System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException) } catch { }
+[System.Windows.Forms.Application]::add_ThreadException({ param($s, $e) Write-AppLog ("Unhandled: " + $e.Exception.Message) })
+
 # 1. Declare Win32 Metrics and DestroyIcon API with high-accuracy Performance Counter
 $MetricsSignature = @"
 using System;
@@ -30,7 +59,12 @@ public class Win32 {
     [DllImport("user32.dll", SetLastError = true)]
     public static extern bool DestroyIcon(IntPtr hIcon);
 
+    [DllImport("kernel32.dll", SetLastError = true)]
+    static extern bool GetSystemTimes(out long idle, out long kernel, out long user);
+
     private static PerformanceCounter cpuCounter;
+    static long lastIdle, lastTotal;
+    static bool haveTimes;
 
     static Win32() {
         try {
@@ -42,13 +76,27 @@ public class Win32 {
         }
     }
 
+    // The counter's names are localised ("Prozessor" on German Windows), so it can
+    // be missing; then the load comes from the system idle/kernel/user times.
     public static double GetCPULoad() {
-        if (cpuCounter == null) return 0.0;
-        try {
-            return (double)cpuCounter.NextValue();
-        } catch {
-            return 0.0;
+        if (cpuCounter != null) {
+            try { return Math.Max(0.0, Math.Min(100.0, (double)cpuCounter.NextValue())); }
+            catch { cpuCounter = null; }
         }
+        return SystemTimesLoad();
+    }
+
+    static double SystemTimesLoad() {
+        long idle, kernel, user;
+        if (!GetSystemTimes(out idle, out kernel, out user)) return 0.0;
+        long total = kernel + user;                      // kernel time includes idle time
+        double load = 0.0;
+        if (haveTimes) {
+            long dt = total - lastTotal, di = idle - lastIdle;
+            if (dt > 0) load = 100.0 * (dt - di) / dt;
+        }
+        lastIdle = idle; lastTotal = total; haveTimes = true;
+        return Math.Max(0.0, Math.Min(100.0, load));
     }
 
     public static double GetRAMLoad() {
@@ -267,7 +315,7 @@ $global:MenuFont = New-Object System.Drawing.Font("Segoe UI", 9.5)
 # 2. Global State Variables
 # The version of this build. Bump it with every release: "Check for updates"
 # compares it with the latest release tag (v2.5 -> 2.5).
-$global:AppVersion = [version]"2.5"
+$global:AppVersion = [version]"2.6"
 $global:AppDir = $PSScriptRoot
 $global:UpdateApi = "https://api.github.com/repos/boode-hub/Sharingan-Monitor/releases/latest"
 $global:UpdateFiles = @("Sharingan.ps1", "install-startup.bat", "remove-startup.bat", "README.md", "LICENSE")
@@ -337,6 +385,7 @@ $global:Defaults = @{
     PulseLevel     = 50       # pulse speed 1..100; 50 = normal
     SpeedLevel     = 50       # 0..100 slider; 0 = paused, 50 = 1.0x (the original speed)
     Direction      = 1        # 1 clockwise, -1 counter-clockwise
+    TransitionSeconds = 3.7   # tomoe -> Mangekyou evolution length, 2.0 .. 5.5 s
     Invert         = $false   # swap tomoe/pattern colour with the eye colour
     Shuffle        = $false
     ShuffleSeconds = 10
@@ -352,6 +401,7 @@ $global:pulseLevel = 50
 $global:speedLevel = 50
 $global:speedMult = 1.0
 $global:rotationDir = 1
+$global:EvolveSeconds = 3.7                # the evolution's length (Transition slider)
 $global:invertOn = $false
 $global:shuffleOn = $false
 $global:shuffleSeconds = 10
@@ -403,6 +453,7 @@ function Get-SettingsObject {
         PulseLevel     = $global:pulseLevel
         SpeedLevel     = $global:speedLevel
         Direction      = $global:rotationDir
+        TransitionSeconds = $global:EvolveSeconds
         Invert         = $global:invertOn
         Shuffle        = $global:shuffleOn
         ShuffleSeconds = $global:shuffleSeconds
@@ -414,40 +465,57 @@ function Get-SettingsObject {
 # optional and validated, so older files and hand-edited profiles still load.
 function Set-SettingsFromObject($s) {
     $has = { param($n) $null -ne $s.PSObject.Properties[$n] }
-    if ((& $has 'Thresholds') -and @($s.Thresholds).Count -eq 4) {
-        $t = @($s.Thresholds | ForEach-Object { [double]$_ })
-        if ($t[0] -ge 0 -and $t[3] -le 100 -and $t[0] -lt $t[1] -and $t[1] -lt $t[2] -and $t[2] -lt $t[3]) { $global:thresholds = $t }
+    # one bad value skips that setting only, never the rest of the file
+    $field = { param([scriptblock]$apply) try { & $apply } catch { Write-AppLog "Settings: skipped a bad value ($($_.Exception.Message))" } }
+    & $field {
+        if ((& $has 'Thresholds') -and @($s.Thresholds).Count -eq 4) {
+            $t = @($s.Thresholds | ForEach-Object { [double]$_ })
+            if ($t[0] -ge 0 -and $t[3] -le 100 -and $t[0] -lt $t[1] -and $t[1] -lt $t[2] -and $t[2] -lt $t[3]) { $global:thresholds = $t }
+        }
     }
-    if ((& $has 'ColorR') -and (& $has 'ColorG') -and (& $has 'ColorB')) {
-        $c = { param($v) [Math]::Max(0, [Math]::Min(255, [int]$v)) }
-        $global:eyeColor = [System.Drawing.Color]::FromArgb((& $c $s.ColorR), (& $c $s.ColorG), (& $c $s.ColorB))
+    & $field {
+        if ((& $has 'ColorR') -and (& $has 'ColorG') -and (& $has 'ColorB')) {
+            $c = { param($v) [Math]::Max(0, [Math]::Min(255, [int]$v)) }
+            $global:eyeColor = [System.Drawing.Color]::FromArgb((& $c $s.ColorR), (& $c $s.ColorG), (& $c $s.ColorB))
+        }
     }
-    if (& $has 'Glow') { $global:glowOn = [bool]$s.Glow }
-    if (& $has 'GlowPulse') { $global:glowPulse = [bool]$s.GlowPulse }
-    if (& $has 'PulseLevel') { $global:pulseLevel = [Math]::Max(1, [Math]::Min(100, [int]$s.PulseLevel)) }
-    if (& $has 'SpeedLevel') { Set-SpeedLevel ([int]$s.SpeedLevel) }
-    elseif (& $has 'Speed') {
-        # settings.json written before the slider existed stored a multiplier
-        $m = [Math]::Max(0.05, [double]$s.Speed)
-        Set-SpeedLevel ([int][Math]::Round(50 + 50 * [Math]::Log($m) / [Math]::Log(6.0)))
+    & $field { if (& $has 'Glow') { $global:glowOn = [bool]$s.Glow } }
+    & $field { if (& $has 'GlowPulse') { $global:glowPulse = [bool]$s.GlowPulse } }
+    & $field { if (& $has 'PulseLevel') { $global:pulseLevel = [Math]::Max(1, [Math]::Min(100, [int]$s.PulseLevel)) } }
+    & $field {
+        if (& $has 'SpeedLevel') { Set-SpeedLevel ([int]$s.SpeedLevel) }
+        elseif (& $has 'Speed') {
+            # settings.json written before the slider existed stored a multiplier
+            $m = [Math]::Max(0.05, [double]$s.Speed)
+            Set-SpeedLevel ([int][Math]::Round(50 + 50 * [Math]::Log($m) / [Math]::Log(6.0)))
+        }
     }
-    if (& $has 'Direction') { if ([int]$s.Direction -lt 0) { $global:rotationDir = -1 } else { $global:rotationDir = 1 } }
-    if (& $has 'Invert') { $global:invertOn = [bool]$s.Invert }
-    if (& $has 'Shuffle') { $global:shuffleOn = [bool]$s.Shuffle }
-    if (& $has 'ShuffleSeconds') { $global:shuffleSeconds = [Math]::Max(1, [int]$s.ShuffleSeconds) }
-    if (& $has 'Style') {
-        $st = Resolve-StyleKey ([string]$s.Style)
-        if ($st) { $global:selectedEyeStyle = $st }
+    & $field { if (& $has 'Direction') { if ([int]$s.Direction -lt 0) { $global:rotationDir = -1 } else { $global:rotationDir = 1 } } }
+    & $field { if (& $has 'TransitionSeconds') { $global:EvolveSeconds = [Math]::Round([Math]::Max(2.0, [Math]::Min(5.5, [double]$s.TransitionSeconds)), 1) } }
+    & $field { if (& $has 'Invert') { $global:invertOn = [bool]$s.Invert } }
+    & $field { if (& $has 'Shuffle') { $global:shuffleOn = [bool]$s.Shuffle } }
+    & $field { if (& $has 'ShuffleSeconds') { $global:shuffleSeconds = [Math]::Max(1, [int]$s.ShuffleSeconds) } }
+    & $field {
+        if (& $has 'Style') {
+            $st = Resolve-StyleKey ([string]$s.Style)
+            if ($st) { $global:selectedEyeStyle = $st }
+        }
     }
 }
 
+# Write a whole file or nothing: the text goes to a .tmp file that then replaces the
+# target, so a crash or power cut mid-save cannot leave a half-written file behind.
+function Write-FileAtomic([string]$path, [string]$text) {
+    $tmp = "$path.tmp"
+    [IO.File]::WriteAllText($tmp, $text, (New-Object System.Text.UTF8Encoding($false)))
+    if (-not (Test-Path $path)) { [IO.File]::Move($tmp, $path); return }
+    try { [IO.File]::Replace($tmp, $path, $null) }
+    catch { [IO.File]::Copy($tmp, $path, $true); [IO.File]::Delete($tmp) }   # file systems without Replace
+}
+
 function Save-Settings {
-    try {
-        Get-SettingsObject | ConvertTo-Json | Set-Content -Path $global:SettingsPath -Encoding UTF8
-    }
-    catch {
-        # A read-only folder should never take the tray icon down with it.
-    }
+    try { Write-FileAtomic $global:SettingsPath (Get-SettingsObject | ConvertTo-Json) }
+    catch { Write-AppLog "Could not save settings: $($_.Exception.Message)" }   # e.g. a read-only folder
 }
 
 function Load-Settings {
@@ -456,7 +524,10 @@ function Load-Settings {
         Set-SettingsFromObject (Get-Content -Path $global:SettingsPath -Raw | ConvertFrom-Json)
     }
     catch {
-        # Corrupt file: fall back to whatever defaults are already loaded.
+        # Unreadable file: keep a copy before the next save replaces it, and carry on
+        # with the defaults.
+        try { Copy-Item $global:SettingsPath "$global:SettingsPath.bad" -Force } catch { }
+        Write-AppLog "settings.json could not be read (kept as settings.json.bad): $($_.Exception.Message)"
     }
 }
 
@@ -471,7 +542,7 @@ function Save-Profile([string]$name) {
     $path = Get-ProfileFileName $name
     if (-not $path) { return $null }
     if (-not (Test-Path $global:ProfilesDir)) { New-Item -ItemType Directory -Path $global:ProfilesDir | Out-Null }
-    Get-SettingsObject | ConvertTo-Json -Compress | Set-Content -Path $path -Encoding UTF8
+    Write-FileAtomic $path (Get-SettingsObject | ConvertTo-Json -Compress)
     return $path
 }
 
@@ -492,6 +563,7 @@ function Reset-Defaults {
     $global:pulseLevel = $d.PulseLevel
     Set-SpeedLevel $d.SpeedLevel
     $global:rotationDir = $d.Direction
+    $global:EvolveSeconds = $d.TransitionSeconds
     $global:invertOn = $d.Invert
     $global:shuffleOn = $d.Shuffle
     $global:shuffleSeconds = $d.ShuffleSeconds
@@ -632,7 +704,7 @@ function Install-Update($rel, [string]$dir) {
 }
 
 # A tray app has no window to own a dialog; DefaultDesktopOnly brings the box to the front.
-function Show-UpdateMessage([string]$text, [string]$buttons = "OK", [string]$icon = "Information") {
+function Show-AppMessage([string]$text, [string]$buttons = "OK", [string]$icon = "Information") {
     return [System.Windows.Forms.MessageBox]::Show($text, "Sharingan Monitor",
         [System.Windows.Forms.MessageBoxButtons]$buttons, [System.Windows.Forms.MessageBoxIcon]$icon,
         [System.Windows.Forms.MessageBoxDefaultButton]::Button1, [System.Windows.Forms.MessageBoxOptions]::DefaultDesktopOnly)
@@ -640,15 +712,15 @@ function Show-UpdateMessage([string]$text, [string]$buttons = "OK", [string]$ico
 
 $UpdateItem.add_Click({
         try { $rel = Get-LatestRelease }
-        catch { Show-UpdateMessage "Could not check for updates.`n`n$($_.Exception.Message)" "OK" "Warning" | Out-Null; return }
-        if ($rel.Version -le $global:AppVersion) { Show-UpdateMessage "You have the latest version (v$($global:AppVersion))." | Out-Null; return }
+        catch { Show-AppMessage "Could not check for updates.`n`n$($_.Exception.Message)" "OK" "Warning" | Out-Null; return }
+        if ($rel.Version -le $global:AppVersion) { Show-AppMessage "You have the latest version (v$($global:AppVersion))." | Out-Null; return }
         # the first paragraph of the release notes, without markdown
         $notes = (($rel.Notes -split "\r?\n\s*\r?\n")[0] -replace '\*\*|`', '' -replace '\[([^\]]+)\]\([^)]+\)', '$1').Trim()
         $q = "Version $($rel.Version) is available (you have v$($global:AppVersion)).`n`n$notes`n`n" +
         "Update now? Your settings, profiles and eyes are kept, and the app restarts when it is done."
-        if ((Show-UpdateMessage $q "YesNo" "Question") -ne "Yes") { return }
+        if ((Show-AppMessage $q "YesNo" "Question") -ne "Yes") { return }
         try { Install-Update $rel $global:AppDir }
-        catch { Show-UpdateMessage "The update was not installed. Nothing was changed.`n`n$($_.Exception.Message)" "OK" "Error" | Out-Null; return }
+        catch { Show-AppMessage "The update was not installed. Nothing was changed.`n`n$($_.Exception.Message)" "OK" "Error" | Out-Null; return }
         $global:RestartAfterExit = $true
         [System.Windows.Forms.Application]::ExitThread()             # section 7 starts the new version
     })
@@ -719,6 +791,13 @@ function Sync-CustomMenu {
         $global:SyncingSpeed = $false
     }
     Update-SpeedText
+    $tv = [int][Math]::Round($global:EvolveSeconds * 10)
+    if ($global:TransitionTrack -and $global:TransitionTrack.Value -ne $tv) {
+        $global:SyncingTransition = $true
+        $global:TransitionTrack.Value = $tv
+        $global:SyncingTransition = $false
+    }
+    if (Get-Command Update-TransitionText -ErrorAction SilentlyContinue) { Update-TransitionText }
     $global:ColorSwatchItem.Text = "Current: $(Get-ColorName $global:eyeColor)"
 }
 
@@ -757,7 +836,7 @@ $CustomItem.DropDownItems.Add($ThresholdsItem) | Out-Null
 $stageLabels = @("1st Tomoe", "2nd Tomoe", "3rd Tomoe", "Mangekyou")
 for ($i = 0; $i -lt 4; $i++) {
     $idx = $i
-    $global:ChoiceMenus += Add-ChoiceMenu $ThresholdsItem $stageLabels[$i] $percentChoices `
+    Add-ChoiceMenu $ThresholdsItem $stageLabels[$i] $percentChoices `
     { $global:thresholds[$idx] }.GetNewClosure() `
     {
         param($v)
@@ -772,7 +851,7 @@ for ($i = 0; $i -lt 4; $i++) {
         for ($j = $idx + 1; $j -lt 4; $j++) { if ($t[$j] -le $t[$j - 1]) { $t[$j] = $t[$j - 1] + 5.0 } }
         for ($j = $idx - 1; $j -ge 0; $j--) { if ($t[$j] -ge $t[$j + 1]) { $t[$j] = $t[$j + 1] - 5.0 } }
         $global:thresholds = $t
-    }.GetNewClosure()
+    }.GetNewClosure() | Out-Null
 }
 
 # --- Color ---------------------------------------------------------------
@@ -836,6 +915,36 @@ $speedHost.Margin = New-Object System.Windows.Forms.Padding(0)
 $SpeedItem.DropDownItems.Add($speedHost) | Out-Null
 $SpeedItem.DropDown.ShowImageMargin = $false     # no check-mark gutter beside the slider
 Update-SpeedText
+
+# --- Transition ----------------------------------------------------------
+# How long the evolution from three tomoe to the Mangekyou takes: 2.0 to 5.5 s in
+# 0.1 s steps (the slider counts tenths). Every phase scales with it.
+$TransitionItem = New-Object System.Windows.Forms.ToolStripMenuItem("Transition")
+$CustomItem.DropDownItems.Add($TransitionItem) | Out-Null
+$global:TransitionTrack = New-Object SharinganSlider($global:MenuTheme)
+$global:TransitionTrack.Font = $global:MenuFont
+$global:TransitionTrack.Caption = "Transition"
+$global:TransitionTrack.Minimum = 20
+$global:TransitionTrack.Maximum = 55
+$global:SyncingTransition = $true
+$global:TransitionTrack.Value = [int][Math]::Round($global:EvolveSeconds * 10)
+$global:SyncingTransition = $false
+function Update-TransitionText {
+    if ($global:TransitionTrack) { $global:TransitionTrack.ValueText = ("{0:0.0} s" -f $global:EvolveSeconds); $global:TransitionTrack.Invalidate() }
+}
+$global:TransitionTrack.add_ValueChanged({
+        if ($global:SyncingTransition) { return }
+        $global:EvolveSeconds = $global:TransitionTrack.Value / 10.0
+        Update-TransitionText
+    })
+$global:TransitionTrack.add_ValueCommitted({ Save-Settings })
+$transitionHost = New-Object System.Windows.Forms.ToolStripControlHost($global:TransitionTrack)
+$transitionHost.AutoSize = $false
+$transitionHost.Size = $global:TransitionTrack.Size
+$transitionHost.Margin = New-Object System.Windows.Forms.Padding(0)
+$TransitionItem.DropDownItems.Add($transitionHost) | Out-Null
+$TransitionItem.DropDown.ShowImageMargin = $false
+Update-TransitionText
 
 # --- Direction -----------------------------------------------------------
 $DirectionItem = New-Object System.Windows.Forms.ToolStripMenuItem("Direction")
@@ -929,7 +1038,7 @@ $ProfilesItem = New-Object System.Windows.Forms.ToolStripMenuItem("Profiles")
 $CustomItem.DropDownItems.Add($ProfilesItem) | Out-Null
 
 function Build-ProfilesMenu {
-    $ProfilesItem.DropDownItems.Clear()
+    while ($ProfilesItem.DropDownItems.Count -gt 0) { $ProfilesItem.DropDownItems[0].Dispose() }   # Dispose also removes it
     $save = New-Object System.Windows.Forms.ToolStripMenuItem("Save current settings as...")
     $save.add_Click({
             try {
@@ -937,7 +1046,10 @@ function Build-ProfilesMenu {
                 $name = [Microsoft.VisualBasic.Interaction]::InputBox("Name for this profile:", "Save profile", "My profile")
             }
             catch { $name = "Profile " + (Get-Date -Format "yyyy-MM-dd HH-mm-ss") }
-            if ($name -and $name.Trim()) { Save-Profile $name | Out-Null }
+            if ($name -and $name.Trim()) {
+                try { if (-not (Save-Profile $name)) { throw "That name has no usable characters." } }
+                catch { Show-AppMessage "The profile was not saved.`n`n$($_.Exception.Message)" "OK" "Warning" | Out-Null }
+            }
         })
     $ProfilesItem.DropDownItems.Add($save) | Out-Null
     $files = @()
@@ -1285,9 +1397,23 @@ function Write-ArtPattern($g, $art, [System.Drawing.Color]$tint, [double]$alpha 
             $ia.SetColorMatrix($cm)
             $art.Attr = $ia; $art.AttrKey = $key
         }
-        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
-        $w = $art.Raster.Width; $h = $art.Raster.Height
-        $g.DrawImage($art.Raster, (New-Object System.Drawing.Rectangle(0, 0, 300, 300)), 0, 0, $w, $h, [System.Drawing.GraphicsUnit]::Pixel, $art.Attr)
+        # Scaling the full-size picture with the best filter every frame was most of the
+        # frame time; keep a copy at the drawn size (in 32-px steps) and draw that ~1:1.
+        $m = $g.Transform; $el = $m.Elements; $m.Dispose()
+        $px = [int][Math]::Ceiling(300.0 * [Math]::Sqrt([Math]::Abs($el[0] * $el[3] - $el[1] * $el[2])) / 32.0) * 32
+        $px = [Math]::Max(32, [Math]::Min($art.Raster.Width, $px))
+        if (-not $art.Scaled) { $art.Scaled = @{} }
+        $img = $art.Scaled[$px]
+        if (-not $img) {
+            $img = New-Object System.Drawing.Bitmap($px, $px)
+            $sg = [System.Drawing.Graphics]::FromImage($img)
+            $sg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $sg.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $sg.DrawImage($art.Raster, 0, 0, $px, $px); $sg.Dispose()
+            $art.Scaled[$px] = $img
+        }
+        $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBilinear
+        $g.DrawImage($img, (New-Object System.Drawing.Rectangle(0, 0, 300, 300)), 0, 0, $px, $px, [System.Drawing.GraphicsUnit]::Pixel, $art.Attr)
         return
     }
     foreach ($it in $art.Pattern) {
@@ -1420,7 +1546,9 @@ function Get-HeartBeat {
 }
 
 # Evolution from three tomoe to the Mangekyou (the owner's design). A timed
-# sequence instead of following the load's easing, so every phase can be seen:
+# sequence instead of following the load's easing, so every phase can be seen.
+# Its length is the Transition setting (2.0 .. 5.5 s, default 3.7); the phases are
+# fractions of it (here at 5.5 s):
 #   0.0-1.2 s  spin-up: the tomoe turn a little faster (1.0x -> 1.7x) on their ring
 #   1.2-2.8 s  converge: still spinning (-> 2.0x) they move in until they touch the
 #              central dot; the ring fades as they leave it
@@ -1428,19 +1556,18 @@ function Get-HeartBeat {
 #   3.3-5.5 s  emerge: the Mangekyou rises out of the dot - it unfolds from the
 #              centre outward, grows (35% -> 100%) and fades in, while the spin
 #              settles back (-> 1.0x)
-# Stage E runs 3 -> 4 over these 5.5 s while the load is at the Mangekyou threshold,
-# and plays back the same way when it drops (section 6).
-$global:EvolveSeconds = 5.5
-$global:EvolvePhase = @{ Spin = 1.2; Conv = 2.8; Merge = 3.3 }
+# Stage E runs 3 -> 4 over the sequence while the load is at the Mangekyou
+# threshold, and plays back the same way when it drops (section 6).
+$global:EvolvePhase = @{ Spin = 1.2 / 5.5; Conv = 2.8 / 5.5; Merge = 3.3 / 5.5 }
 $global:EvolveSpinCap = 0.14           # rad per tick (~4 rad/s): the most the spin-up reaches
 function Get-Smooth([double]$x) { $x = [Math]::Max(0.0, [Math]::Min(1.0, $x)); return $x * $x * (3.0 - 2.0 * $x) }
 
 # Spin multiplier at sequence position u (0..1).
 function Get-EvolveSpin([double]$u) {
-    $t = $u * $global:EvolveSeconds; $ph = $global:EvolvePhase
+    $t = $u; $ph = $global:EvolvePhase
     if ($t -lt $ph.Spin) { return 1.0 + 0.7 * (Get-Smooth ($t / $ph.Spin)) }
     if ($t -lt $ph.Merge) { return 1.7 + 0.3 * (($t - $ph.Spin) / ($ph.Merge - $ph.Spin)) }
-    return 2.0 - (Get-Smooth (($t - $ph.Merge) / ($global:EvolveSeconds - $ph.Merge)))
+    return 2.0 - (Get-Smooth (($t - $ph.Merge) / (1.0 - $ph.Merge)))
 }
 
 # Spin (rad per tick, magnitude) at sequence position u, starting from the speed the
@@ -1454,7 +1581,7 @@ function Get-EvolveRate([double]$base, [double]$u) {
 
 # What the eye shows at sequence position u (0..1), in the 128-px canvas.
 function Get-EvolveState([double]$u) {
-    $t = $u * $global:EvolveSeconds; $ph = $global:EvolvePhase
+    $t = $u; $ph = $global:EvolvePhase
     $st = @{ OrbitR = 35.0; TomoeK = 1.0; RingA = 1.0; PupilR = 14.0; PatK = 0.0; PatA = 0.0; Reveal = 0.0 }
     if ($t -ge $ph.Spin) {                                     # in toward the dot, until they touch it
         $c = Get-Smooth (($t - $ph.Spin) / ($ph.Conv - $ph.Spin))
@@ -1465,7 +1592,7 @@ function Get-EvolveState([double]$u) {
         $st.OrbitR = 16.0 * (1.0 - $m); $st.TomoeK = 0.7 * (1.0 - $m); $st.RingA = 0.0; $st.PupilR = 14.0 + 3.0 * $m
     }
     if ($t -ge $ph.Merge) {                                    # the Mangekyou unfolds from the centre
-        $e = [Math]::Min(1.0, ($t - $ph.Merge) / ($global:EvolveSeconds - $ph.Merge))
+        $e = [Math]::Min(1.0, ($t - $ph.Merge) / (1.0 - $ph.Merge))
         $eo = 1.0 - [Math]::Pow(1.0 - $e, 3)                   # quick start, gentle finish
         $st.TomoeK = 0.0; $st.Reveal = 58.0 * $eo; $st.PatK = 0.35 + 0.65 * $eo
         $st.PatA = Get-Smooth ($e / 0.45); $st.PupilR = 17.0 * (1.0 - (Get-Smooth ($e / 0.5)))
@@ -1503,6 +1630,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
     $redBrush = New-Object System.Drawing.SolidBrush($global:eyeColor)
     $blackBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Black)
     $borderPen = New-Object System.Drawing.Pen([System.Drawing.Color]::Black, 4.5)
+    try {
 
     # A0. Glow: a heartbeat. Each beat ("lub", then a softer "dub") hits hard and
     # decays: the eye colour flashes saturated and bright and a halo pushes out
@@ -1661,11 +1789,15 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $g.FillPolygon($blackBrush, $tailPts)
     }
 
-    # F. Cover cleanup
-    $redBrush.Dispose()
-    $blackBrush.Dispose()
-    $borderPen.Dispose()
-    $g.Dispose()
+    }
+    catch { $bmp.Dispose(); throw }                          # nothing left behind if a frame fails
+    finally {
+        # F. Cover cleanup
+        $redBrush.Dispose()
+        $blackBrush.Dispose()
+        $borderPen.Dispose()
+        $g.Dispose()
+    }
 
     # Invert: black becomes the eye colour and the eye colour becomes black.
     # Every pixel is a blend of the two, so new = eyeColour - old, per channel.
@@ -1713,9 +1845,17 @@ $script:EvolveBase = 0.0
 # Let the uninstall batch file find and stop this instance.
 try { $PID | Set-Content -Path (Join-Path $PSScriptRoot "sharingan.pid") -Encoding ASCII } catch {}
 
+$script:LastFrameKey = $null
+$script:ShownIcon = $null
+
 $RenderFrame = {
+  try {
+    # Real time since the last tick: ticks run later than 35 ms when the machine is busy.
+    $now = $script:LoopClock.Elapsed.TotalSeconds
+    $dt = [Math]::Min(0.25, $now - $script:LoopLast); $script:LoopLast = $now
+
     # Update metrics at regular intervals
-    $script:metricsTimer += $tickInterval
+    $script:metricsTimer += $dt * 1000.0
     if ($script:metricsTimer -ge $metricsInterval) {
         $script:metricsTimer = 0
         if ($global:monitoringModeIsRAM) {
@@ -1728,7 +1868,7 @@ $RenderFrame = {
 
     # Shuffle: swap to a random eye every N seconds while enabled
     if ($global:shuffleOn) {
-        $script:shuffleTimer += $tickInterval
+        $script:shuffleTimer += $dt * 1000.0
         if ($script:shuffleTimer -ge ($global:shuffleSeconds * 1000)) {
             $script:shuffleTimer = 0
             Set-EyeStyle (Get-ShufflePick)
@@ -1747,8 +1887,6 @@ $RenderFrame = {
     # Stages 0..3 ease toward the load. 3 -> 4 is the evolution sequence: it runs
     # forward in real time while the load is at the Mangekyou threshold and plays
     # back the same way when it drops, so it never jumps.
-    $now = $script:LoopClock.Elapsed.TotalSeconds
-    $dt = [Math]::Min(0.25, $now - $script:LoopLast); $script:LoopLast = $now
     $cs = $global:currentStage
     if ($cs -ge 3.0 -and ($targetStage -ge 4.0 -or $cs -gt 3.0)) {
         $step = $dt / $global:EvolveSeconds
@@ -1783,21 +1921,27 @@ $RenderFrame = {
         $global:rotationAngle += (2 * [Math]::PI)
     }
 
-    # Create next icon frame
-    $iconObj = Get-SharinganIcon $global:currentStage $global:rotationAngle $global:selectedEyeStyle
-    $oldIcon = $NotifyIcon.Icon
+    # Draw a new frame only when it would look different. The dormant eye shows no
+    # rotation, and a paused or settled eye is still: those frames are skipped.
+    $angleKey = 0.0
+    if ($cs -gt 0.0) { $angleKey = $global:rotationAngle }
+    $key = "$cs|$angleKey|$($global:selectedEyeStyle)|$($global:eyeColor.ToArgb())|$($global:invertOn)|$($global:glowOn)"
+    $beating = $global:glowOn -and $global:glowPulse
+    if ($beating -or $key -ne $script:LastFrameKey) {
+        $iconObj = Get-SharinganIcon $global:currentStage $global:rotationAngle $global:selectedEyeStyle
+        $NotifyIcon.Icon = $iconObj.Icon
+        # Free the previous frame only once the new one is showing; the shown icon
+        # keeps a live handle so Windows can re-add it after Explorer restarts.
+        if ($script:ShownIcon) { $script:ShownIcon.Icon.Dispose(); [Win32]::DestroyIcon($script:ShownIcon.Handle) | Out-Null }
+        $script:ShownIcon = $iconObj
+        $script:LastFrameKey = $key
+    }
 
-    # Update system tray
     $modeText = if ($global:monitoringModeIsRAM) { "RAM" } else { "CPU" }
-    $NotifyIcon.Icon = $iconObj.Icon
     $eyeParts = $global:selectedEyeStyle -split ':', 2
     $NotifyIcon.Text = "$($eyeParts[1]) - $modeText $([Math]::Round($global:currentLoadPercent))%"
-
-    # Destroy the old icon objects to prevent GDI / system memory leaks
-    if ($oldIcon -ne $null) {
-        $oldIcon.Dispose()
-    }
-    [Win32]::DestroyIcon($iconObj.Handle) | Out-Null
+  }
+  catch { Write-AppLog ("Frame: " + $_.Exception.Message) }
 }
 
 $AnimTimer = New-Object System.Windows.Forms.Timer
@@ -1813,8 +1957,10 @@ $AnimTimer.Dispose()
 Save-Settings
 try { [IO.File]::Delete((Join-Path $PSScriptRoot "sharingan.pid")) } catch {}
 $NotifyIcon.Visible = $false
-if ($NotifyIcon.Icon -ne $null) { $NotifyIcon.Icon.Dispose() }
 $NotifyIcon.Dispose()
+if ($script:ShownIcon) { $script:ShownIcon.Icon.Dispose(); [Win32]::DestroyIcon($script:ShownIcon.Handle) | Out-Null }
+# let the next instance (an update's restart, or a later start) take over
+if ($script:OwnsMutex) { try { $script:InstanceMutex.ReleaseMutex() } catch { } }
 
 # An update just replaced the files: start the new version, hidden. This runs after
 # the pid file is gone, so the new instance's own pid file is the one that stays.
