@@ -315,7 +315,7 @@ $global:MenuFont = New-Object System.Drawing.Font("Segoe UI", 9.5)
 # 2. Global State Variables
 # The version of this build. Bump it with every release: "Check for updates"
 # compares it with the latest release tag (v2.5 -> 2.5).
-$global:AppVersion = [version]"2.7"
+$global:AppVersion = [version]"2.8"
 $global:AppDir = $PSScriptRoot
 $global:UpdateApi = "https://api.github.com/repos/boode-hub/Sharingan-Monitor/releases/latest"
 $global:UpdateFiles = @("Sharingan.ps1", "install-startup.bat", "remove-startup.bat", "README.md", "LICENSE")
@@ -388,6 +388,7 @@ $global:Defaults = @{
     TransitionSeconds = 3.7   # tomoe -> Mangekyou evolution length, 2.0 .. 5.5 s
     Invert         = $false   # swap tomoe/pattern colour with the eye colour
     Shuffle        = $false
+    Monitor        = "CPU"    # what the eye tracks: "CPU" or "RAM"
     ShuffleSeconds = 10
     Style          = $global:DefaultStyle
 }
@@ -457,6 +458,7 @@ function Get-SettingsObject {
         Invert         = $global:invertOn
         Shuffle        = $global:shuffleOn
         ShuffleSeconds = $global:shuffleSeconds
+        Monitor        = $(if ($global:monitoringModeIsRAM) { "RAM" } else { "CPU" })
         Style          = $global:selectedEyeStyle
     }
 }
@@ -495,6 +497,12 @@ function Set-SettingsFromObject($s) {
     & $field { if (& $has 'Invert') { $global:invertOn = [bool]$s.Invert } }
     & $field { if (& $has 'Shuffle') { $global:shuffleOn = [bool]$s.Shuffle } }
     & $field { if (& $has 'ShuffleSeconds') { $global:shuffleSeconds = [Math]::Max(1, [int]$s.ShuffleSeconds) } }
+    & $field {
+        if (& $has 'Monitor') {
+            $mode = ([string]$s.Monitor).Trim().ToUpper()
+            if ($mode -eq 'RAM') { $global:monitoringModeIsRAM = $true } elseif ($mode -eq 'CPU') { $global:monitoringModeIsRAM = $false }
+        }
+    }
     & $field {
         if (& $has 'Style') {
             $st = Resolve-StyleKey ([string]$s.Style)
@@ -567,6 +575,7 @@ function Reset-Defaults {
     $global:invertOn = $d.Invert
     $global:shuffleOn = $d.Shuffle
     $global:shuffleSeconds = $d.ShuffleSeconds
+    $global:monitoringModeIsRAM = ($d.Monitor -eq "RAM")
     Set-EyeStyle $d.Style
 }
 
@@ -616,14 +625,15 @@ $ContextMenu.Items.Add($ExitItem) | Out-Null
 $NotifyIcon.ContextMenuStrip = $ContextMenu
 
 # Event Bindings
+# CPU or RAM is remembered like every other setting (settings.json and profiles).
+function Update-ToggleText {
+    if ($global:monitoringModeIsRAM) { $ToggleItem.Text = "Swap to CPU Tracking" } else { $ToggleItem.Text = "Swap to RAM Tracking" }
+}
 $ToggleItem.add_Click({
         $global:monitoringModeIsRAM = -not $global:monitoringModeIsRAM
-        if ($global:monitoringModeIsRAM) {
-            $ToggleItem.Text = "Swap to CPU Tracking"
-        }
-        else {
-            $ToggleItem.Text = "Swap to RAM Tracking"
-        }
+        Update-ToggleText
+        $script:metricsTimer = 1e9                    # read the new metric on the next frame, not in up to 1 s
+        Save-Settings
     })
 
 function Set-EyeStyle($styleName) {
@@ -813,6 +823,7 @@ function Sync-CustomMenu {
     }
     if (Get-Command Update-TransitionText -ErrorAction SilentlyContinue) { Update-TransitionText }
     $global:ColorSwatchItem.Text = "Current: $(Get-ColorName $global:eyeColor)"
+    Update-ToggleText
 }
 
 $global:ColorPresets = @(
