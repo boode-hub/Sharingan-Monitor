@@ -121,7 +121,7 @@ unfolding from the centre outward. When the load drops it plays back the same wa
 
 ```
 Swap to RAM Tracking       toggle between CPU and RAM (remembered)
-Eyes                    >  the Classic eyes (and V1, see below)
+Eyes                    >  the Classic eyes (and V1, see below), each with a picture
 Customize               >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
                         |  Color       >  11 presets + full colour picker
                         |  Speed       >  slider, 0 (paused) to 100
@@ -133,7 +133,7 @@ Customize               >  Thresholds  >  1st / 2nd / 3rd Tomoe, Mangekyou
                         |  Profiles    >  save / load a whole set of settings
                         |  Reset to Defaults
 Buy me a coffee            opens the support page in your browser
-Check for updates (v2.8)   looks for a newer release and installs it if you say yes
+Check for updates (v2.9)   looks for a newer release and installs it if you say yes
 Exit
 ```
 

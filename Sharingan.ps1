@@ -199,6 +199,7 @@ public class SharinganMenuRenderer : ToolStripProfessionalRenderer {
         }
     }
     protected override void OnRenderItemCheck(ToolStripItemImageRenderEventArgs e) {
+        if (e.Item.Image != null) return;                 // eye thumbnails: OnRenderItemImage rings them
         Rectangle r = e.ImageRectangle;
         float cx = r.X + r.Width / 2f, cy = r.Y + r.Height / 2f;
         e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
@@ -206,6 +207,20 @@ public class SharinganMenuRenderer : ToolStripProfessionalRenderer {
             p.StartCap = LineCap.Round; p.EndCap = LineCap.Round; p.LineJoin = LineJoin.Round;
             e.Graphics.DrawLines(p, new PointF[] { new PointF(cx - 4f, cy), new PointF(cx - 1.2f, cy + 3f), new PointF(cx + 4.5f, cy - 3.5f) });
         }
+    }
+    // A ticked item with a picture (the eye thumbnails): the picture in an accent
+    // ring, instead of the default blue square behind it.
+    protected override void OnRenderItemImage(ToolStripItemImageRenderEventArgs e) {
+        ToolStripMenuItem mi = e.Item as ToolStripMenuItem;
+        if (mi != null && mi.Checked && e.Image != null) {
+            Rectangle r = e.ImageRectangle;
+            e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+            e.Graphics.InterpolationMode = InterpolationMode.HighQualityBicubic;
+            e.Graphics.DrawImage(e.Image, r);
+            using (Pen p = new Pen(t.Accent, 2f)) e.Graphics.DrawEllipse(p, r.X - 2f, r.Y - 2f, r.Width + 3f, r.Height + 3f);
+            return;
+        }
+        base.OnRenderItemImage(e);
     }
     internal static GraphicsPath Round(RectangleF r, float rad) {
         GraphicsPath gp = new GraphicsPath();
@@ -315,7 +330,7 @@ $global:MenuFont = New-Object System.Drawing.Font("Segoe UI", 9.5)
 # 2. Global State Variables
 # The version of this build. Bump it with every release: "Check for updates"
 # compares it with the latest release tag (v2.5 -> 2.5).
-$global:AppVersion = [version]"2.8"
+$global:AppVersion = [version]"2.9"
 $global:AppDir = $PSScriptRoot
 $global:UpdateApi = "https://api.github.com/repos/boode-hub/Sharingan-Monitor/releases/latest"
 $global:UpdateFiles = @("Sharingan.ps1", "install-startup.bat", "remove-startup.bat", "README.md", "LICENSE")
@@ -753,6 +768,39 @@ $ExitItem.add_Click({
         $global:running = $false
         [System.Windows.Forms.Application]::ExitThread()   # stops the message pump in section 6
     })
+
+# Eyes menu: a small picture of each eye's Mangekyou in front of its name, in the
+# current eye colour. Drawn the first time the menu opens and again only after the
+# colour changes, so start-up stays fast.
+$global:EyeThumbSize = 22
+$script:EyeThumbKey = $null
+# shown at their own size: submenus ignore their own ImageScalingSize (they take the
+# tray menu's 16 px), and setting it there would widen every other menu's gutter
+foreach ($mi in $global:StyleMenuItems.Values) { $mi.ImageScaling = [System.Windows.Forms.ToolStripItemImageScaling]::None }
+function Update-EyeThumbs {
+    $key = $global:eyeColor.ToArgb()
+    if ($script:EyeThumbKey -eq $key) { return }
+    # a plain eye: no glow, no invert
+    $glow = $global:glowOn; $inv = $global:invertOn; $global:glowOn = $false; $global:invertOn = $false
+    try {
+        foreach ($k in $global:StyleMenuItems.Keys) {
+            $o = Get-SharinganIcon 4.0 0.0 $k
+            $full = $o.Icon.ToBitmap(); $o.Icon.Dispose(); [Win32]::DestroyIcon($o.Handle) | Out-Null
+            $n = $global:EyeThumbSize
+            $thumb = New-Object System.Drawing.Bitmap($n, $n)
+            $tg = [System.Drawing.Graphics]::FromImage($thumb)
+            $tg.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBicubic
+            $tg.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
+            $tg.DrawImage($full, 0, 0, $n, $n); $tg.Dispose(); $full.Dispose()
+            $item = $global:StyleMenuItems[$k]
+            $old = $item.Image; $item.Image = $thumb; if ($old) { $old.Dispose() }
+        }
+        $script:EyeThumbKey = $key
+    }
+    catch { Write-AppLog "Eye thumbnails: $($_.Exception.Message)" }
+    finally { $global:glowOn = $glow; $global:invertOn = $inv }
+}
+$StyleItem.add_DropDownOpening({ Update-EyeThumbs })
 
 # Apply saved settings (or stay on defaults), then sync the menu check mark.
 Load-Settings
