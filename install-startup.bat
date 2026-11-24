@@ -1,4 +1,5 @@
 @echo off
+setlocal disabledelayedexpansion
 REM Sharingan Monitor - enable at startup and launch now.
 REM No admin needed: this writes to the per-user Run key only.
 
@@ -25,12 +26,10 @@ if errorlevel 1 (
     exit /b 1
 )
 
-REM Don't stack a second tray icon if it's already running. A pid file left behind
-REM by a crash or a shutdown does not count: that process must still be alive.
+REM Don't stack a second tray icon if it's already running: a running eye holds a
+REM named lock (and a second copy would see it and quietly leave anyway).
 set "RUNNING="
-set "RPID="
-if exist "%~dp0sharingan.pid" set /p RPID=<"%~dp0sharingan.pid"
-if defined RPID powershell -NoProfile -Command "$id = 0; if ([int]::TryParse('%RPID%'.Trim(), [ref]$id) -and (Get-Process -Id $id -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match 'powershell|pwsh' })) { exit 0 } else { exit 1 }" && set "RUNNING=1"
+powershell -NoProfile -Command "$m = $null; if ([Threading.Mutex]::TryOpenExisting('Local\SharinganTrayMonitor', [ref]$m)) { exit 0 } else { exit 1 }" && set "RUNNING=1"
 if not defined RUNNING (
     start "" wscript.exe //nologo "%VBS%"
     echo Started.

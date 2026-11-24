@@ -1,5 +1,5 @@
 @echo off
-setlocal enabledelayedexpansion
+setlocal disabledelayedexpansion
 REM Sharingan Monitor - remove from startup and stop the running instance.
 
 reg delete "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v "SharinganMonitor" /f >nul 2>&1
@@ -9,15 +9,12 @@ if errorlevel 1 (
     echo Startup entry removed.
 )
 
-if exist "%~dp0sharingan.pid" (
-    set /p TARGETPID=<"%~dp0sharingan.pid"
-    REM Confirm the PID still belongs to a PowerShell process before killing it -
-    REM a stale pid file could otherwise point at something Windows has recycled.
-    powershell -NoProfile -Command "$p = Get-Process -Id !TARGETPID! -ErrorAction SilentlyContinue; if ($p -and $p.ProcessName -match 'powershell|pwsh') { Stop-Process -Id !TARGETPID! -Force; 'Stopped running instance.' } else { 'No running instance found.' }"
-    del "%~dp0sharingan.pid" >nul 2>&1
-) else (
-    echo No running instance found.
-)
+REM PowerShell reads the pid file itself (its path comes from the environment), so
+REM neither the folder name nor the file's content can change the command. The pid
+REM must be a PowerShell running Sharingan.ps1: a file left by a crash or a shutdown
+REM can name a number Windows has since given to another program.
+set "PIDFILE=%~dp0sharingan.pid"
+powershell -NoProfile -Command "$id = 0; $p = $null; if ((Test-Path -LiteralPath $env:PIDFILE) -and [int]::TryParse([string](Get-Content -LiteralPath $env:PIDFILE -TotalCount 1), [ref]$id)) { $p = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $id) | Where-Object { $_.Name -in 'powershell.exe', 'pwsh.exe' -and $_.CommandLine -like '*Sharingan.ps1*' } }; if ($p) { Stop-Process -Id $id -Force; 'Stopped running instance.' } else { 'No running instance found.' }; Remove-Item -LiteralPath $env:PIDFILE -ErrorAction SilentlyContinue"
 
 if exist "%~dp0launcher.vbs" del "%~dp0launcher.vbs" >nul 2>&1
 

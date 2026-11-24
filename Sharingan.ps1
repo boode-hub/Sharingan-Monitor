@@ -24,6 +24,7 @@ function Write-AppLog([string]$msg) {
     try {
         $now = Get-Date
         if ($script:LogSeen.ContainsKey($msg) -and ($now - $script:LogSeen[$msg]).TotalSeconds -lt 60) { return }
+        if ($script:LogSeen.Count -ge 200) { $script:LogSeen.Clear() }   # messages that vary must not pile up
         $script:LogSeen[$msg] = $now
         if ((Test-Path $global:LogPath) -and (Get-Item $global:LogPath).Length -gt 256KB) { Move-Item $global:LogPath "$global:LogPath.old" -Force }
         Add-Content -Path $global:LogPath -Value ("{0:yyyy-MM-dd HH:mm:ss}  {1}" -f $now, $msg) -Encoding UTF8
@@ -62,25 +63,29 @@ public class Win32 {
     [DllImport("kernel32.dll", SetLastError = true)]
     static extern bool GetSystemTimes(out long idle, out long kernel, out long user);
 
-    private static PerformanceCounter cpuCounter;
+    private static volatile PerformanceCounter cpuCounter;
     static long lastIdle, lastTotal;
     static bool haveTimes;
 
+    // The same counter Task Manager reads. Creating it takes over a second (Windows
+    // loads its counter tables), so it is made in the background and start-up does
+    // not wait; until it is ready the load comes from the system times below.
     static Win32() {
-        try {
-            // Using standard WMI-backed PerformanceCounter which exactly matches Windows Task Manager
-            cpuCounter = new PerformanceCounter("Processor", "% Processor Time", "_Total");
-            cpuCounter.NextValue(); // Initial sample (will read 0)
-        } catch {
-            cpuCounter = null;
-        }
+        System.Threading.ThreadPool.QueueUserWorkItem(delegate {
+            try {
+                PerformanceCounter c = new PerformanceCounter("Processor", "% Processor Time", "_Total");
+                c.NextValue();                               // the first sample reads 0
+                cpuCounter = c;
+            } catch { }
+        });
     }
 
     // The counter's names are localised ("Prozessor" on German Windows), so it can
     // be missing; then the load comes from the system idle/kernel/user times.
     public static double GetCPULoad() {
-        if (cpuCounter != null) {
-            try { return Math.Max(0.0, Math.Min(100.0, (double)cpuCounter.NextValue())); }
+        PerformanceCounter c = cpuCounter;
+        if (c != null) {
+            try { return Math.Max(0.0, Math.Min(100.0, (double)c.NextValue())); }
             catch { cpuCounter = null; }
         }
         return SystemTimesLoad();
@@ -256,6 +261,15 @@ public class SharinganSlider : Control {
         TabStop = true;
         Cursor = Cursors.Hand;
     }
+    // Screen readers: a slider named by its caption, its value the text on the right.
+    protected override AccessibleObject CreateAccessibilityInstance() { return new Access(this); }
+    class Access : ControlAccessibleObject {
+        readonly SharinganSlider s;
+        public Access(SharinganSlider owner) : base(owner) { s = owner; }
+        public override string Name { get { return s.Caption; } }
+        public override string Value { get { return s.ValueText; } }
+        public override AccessibleRole Role { get { return AccessibleRole.Slider; } }
+    }
     public int Minimum { get { return min; } set { min = value; if (val < min) val = min; Invalidate(); } }
     public int Maximum { get { return max; } set { max = value; if (val > max) val = max; Invalidate(); } }
     public int Value {
@@ -265,6 +279,7 @@ public class SharinganSlider : Control {
             if (v == val) return;
             val = v; Invalidate();
             if (ValueChanged != null) ValueChanged(this, EventArgs.Empty);
+            AccessibilityNotifyClients(AccessibleEvents.ValueChange, -1);   // after ValueText is updated
         }
     }
     public void Step(int delta) { Value = val + delta; Commit(); }
@@ -315,7 +330,7 @@ public class SharinganSlider : Control {
     protected override void OnLostFocus(EventArgs e) { base.OnLostFocus(e); Invalidate(); }
 }
 '@
-Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition $ModernUiSource
+Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing, Accessibility -TypeDefinition $ModernUiSource
 
 # Follow Windows' light/dark setting for the tray menu.
 $global:MenuDark = $false
@@ -330,13 +345,12 @@ $global:MenuFont = New-Object System.Drawing.Font("Segoe UI", 9.5)
 # 2. Global State Variables
 # The version of this build. Bump it with every release: "Check for updates"
 # compares it with the latest release tag (v2.5 -> 2.5).
-$global:AppVersion = [version]"2.9"
+$global:AppVersion = [version]"2.10"
 $global:AppDir = $PSScriptRoot
 $global:UpdateApi = "https://api.github.com/repos/boode-hub/Sharingan-Monitor/releases/latest"
 $global:UpdateFiles = @("Sharingan.ps1", "install-startup.bat", "remove-startup.bat", "README.md", "LICENSE")
 $global:RestartAfterExit = $false
 
-$global:running = $true
 $global:monitoringModeIsRAM = $false       # False = CPU, True = RAM
 $global:currentLoadPercent = [Win32]::GetCPULoad()
 $global:selectedEyeStyle = "Itachi"        # Default set to Itachi
@@ -514,7 +528,7 @@ function Set-SettingsFromObject($s) {
     & $field { if (& $has 'ShuffleSeconds') { $global:shuffleSeconds = [Math]::Max(1, [int]$s.ShuffleSeconds) } }
     & $field {
         if (& $has 'Monitor') {
-            $mode = ([string]$s.Monitor).Trim().ToUpper()
+            $mode = ([string]$s.Monitor).Trim().ToUpperInvariant()
             if ($mode -eq 'RAM') { $global:monitoringModeIsRAM = $true } elseif ($mode -eq 'CPU') { $global:monitoringModeIsRAM = $false }
         }
     }
@@ -728,11 +742,16 @@ function Install-Update($rel, [string]$dir) {
     finally { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
 }
 
-# A tray app has no window to own a dialog, and an ownerless box opens BEHIND the
-# window in front (DefaultDesktopOnly does not change that - tested: "Check for
-# updates" looked like it did nothing). So the box gets an invisible, topmost owner
-# in the middle of the screen the click came from: it opens on top of everything.
-function Show-AppMessage([string]$text, [string]$buttons = "OK", [string]$icon = "Information") {
+# Every dialog goes through here. A tray app has no window to own a dialog, and an
+# ownerless one opens BEHIND the window in front (DefaultDesktopOnly does not change
+# that - tested: "Check for updates" looked like it did nothing). So it gets an
+# invisible, topmost owner in the middle of the screen the click came from: it opens
+# on top of everything. The owner is also the first window this process shows, and
+# that one takes the "hidden" from a hidden start (launcher.vbs) - a dialog shown
+# first stayed invisible and froze the app. While a dialog is open the tray menu
+# stays shut, so a second dialog (or a second update) cannot start inside it.
+$script:DialogDepth = 0
+function Invoke-WithTopOwner([scriptblock]$show) {
     $area = [System.Windows.Forms.Screen]::FromPoint([System.Windows.Forms.Cursor]::Position).WorkingArea
     $owner = New-Object System.Windows.Forms.Form
     $owner.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::None
@@ -741,12 +760,37 @@ function Show-AppMessage([string]$text, [string]$buttons = "OK", [string]$icon =
     $owner.Opacity = 0
     $owner.StartPosition = [System.Windows.Forms.FormStartPosition]::Manual
     $owner.Bounds = New-Object System.Drawing.Rectangle(($area.X + $area.Width / 2), ($area.Y + $area.Height / 2), 1, 1)
-    try {
-        $owner.Show(); $owner.Activate()
-        return [System.Windows.Forms.MessageBox]::Show($owner, $text, "Sharingan Monitor",
-            [System.Windows.Forms.MessageBoxButtons]$buttons, [System.Windows.Forms.MessageBoxIcon]$icon)
+    $script:DialogDepth++
+    try { $owner.Show(); $owner.Activate(); & $show $owner }
+    finally { $script:DialogDepth--; $owner.Close(); $owner.Dispose() }
+}
+$ContextMenu.add_Opening({ param($s, $e) if ($script:DialogDepth -gt 0) { $e.Cancel = $true } })
+
+function Show-AppMessage([string]$text, [string]$buttons = "OK", [string]$icon = "Information") {
+    Invoke-WithTopOwner { param($o) [System.Windows.Forms.MessageBox]::Show($o, $text, "Sharingan Monitor",
+            [System.Windows.Forms.MessageBoxButtons]$buttons, [System.Windows.Forms.MessageBoxIcon]$icon) }
+}
+
+# The profile name prompt (the VisualBasic InputBox has no owner to give it).
+function Read-ProfileName {
+    Invoke-WithTopOwner {
+        param($o)
+        $f = New-Object System.Windows.Forms.Form
+        $f.Text = "Save profile"; $f.Font = $global:MenuFont; $f.ShowInTaskbar = $false
+        $f.FormBorderStyle = [System.Windows.Forms.FormBorderStyle]::FixedDialog; $f.MaximizeBox = $false; $f.MinimizeBox = $false
+        $f.StartPosition = [System.Windows.Forms.FormStartPosition]::CenterParent
+        $f.ClientSize = New-Object System.Drawing.Size(320, 112)
+        $lb = New-Object System.Windows.Forms.Label; $lb.Text = "Name for this profile:"; $lb.SetBounds(14, 14, 292, 20)
+        $tb = New-Object System.Windows.Forms.TextBox; $tb.Text = "My profile"; $tb.MaxLength = 60; $tb.SetBounds(14, 38, 292, 24)
+        $ok = New-Object System.Windows.Forms.Button; $ok.Text = "Save"; $ok.SetBounds(140, 76, 80, 26)
+        $ok.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $no = New-Object System.Windows.Forms.Button; $no.Text = "Cancel"; $no.SetBounds(226, 76, 80, 26)
+        $no.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $f.Controls.AddRange(@($lb, $tb, $ok, $no)); $f.AcceptButton = $ok; $f.CancelButton = $no
+        $tb.SelectAll()
+        try { if ($f.ShowDialog($o) -eq [System.Windows.Forms.DialogResult]::OK) { $tb.Text } }
+        finally { $f.Dispose() }
     }
-    finally { $owner.Close(); $owner.Dispose() }
 }
 
 $UpdateItem.add_Click({
@@ -765,7 +809,6 @@ $UpdateItem.add_Click({
     })
 
 $ExitItem.add_Click({
-        $global:running = $false
         [System.Windows.Forms.Application]::ExitThread()   # stops the message pump in section 6
     })
 
@@ -950,17 +993,18 @@ foreach ($preset in $global:ColorPresets) {
 $ColorItem.DropDownItems.Add((New-Object System.Windows.Forms.ToolStripSeparator)) | Out-Null
 $PickColorItem = New-Object System.Windows.Forms.ToolStripMenuItem("Pick a Color...")
 $PickColorItem.add_Click({
-        # ColorDialog is a shell-owned modal dialog, so it activates correctly even
-        # though we have no main window. The animation pauses while it is open.
+        # Owned like every dialog (Invoke-WithTopOwner). The animation pauses while it is open.
         $dlg = New-Object System.Windows.Forms.ColorDialog
         $dlg.FullOpen = $true
         $dlg.Color = $global:eyeColor
-        if ($dlg.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {
-            $global:eyeColor = $dlg.Color
-            Save-Settings
-            Sync-CustomMenu
+        try {
+            if ((Invoke-WithTopOwner { param($o) $dlg.ShowDialog($o) }) -eq [System.Windows.Forms.DialogResult]::OK) {
+                $global:eyeColor = $dlg.Color
+                Save-Settings
+                Sync-CustomMenu
+            }
         }
-        $dlg.Dispose()
+        finally { $dlg.Dispose() }
     })
 $ColorItem.DropDownItems.Add($PickColorItem) | Out-Null
 
@@ -1114,11 +1158,7 @@ function Build-ProfilesMenu {
     while ($ProfilesItem.DropDownItems.Count -gt 0) { $ProfilesItem.DropDownItems[0].Dispose() }   # Dispose also removes it
     $save = New-Object System.Windows.Forms.ToolStripMenuItem("Save current settings as...")
     $save.add_Click({
-            try {
-                Add-Type -AssemblyName Microsoft.VisualBasic
-                $name = [Microsoft.VisualBasic.Interaction]::InputBox("Name for this profile:", "Save profile", "My profile")
-            }
-            catch { $name = "Profile " + (Get-Date -Format "yyyy-MM-dd HH-mm-ss") }
+            $name = Read-ProfileName
             if ($name -and $name.Trim()) {
                 try { if (-not (Save-Profile $name)) { throw "That name has no usable characters." } }
                 catch { Show-AppMessage "The profile was not saved.`n`n$($_.Exception.Message)" "OK" "Warning" | Out-Null }
@@ -1174,10 +1214,6 @@ Set-ModernMenu $ContextMenu.Items
 
 Sync-CustomMenu
 
-# Warm up CPU counter
-Start-Sleep -Milliseconds 200
-[Win32]::GetCPULoad() | Out-Null
-
 # 4b. SVG eye engine (renders the files in .\eyes\ straight from their paths)
 # Minimal SVG -> GDI+ engine for the Mangekyou eye files.
 # Supports what those files use: circle, path (M L H V C S Z), g, use, transform
@@ -1190,7 +1226,7 @@ function Get-Num([string]$s) { [double]::Parse(($s.Trim() -replace 'px$', ''), $
 
 function ConvertTo-SvgColor([string]$v) {
     if (-not $v) { return $null }
-    $v = $v.Trim().ToLower()
+    $v = $v.Trim().ToLowerInvariant()
     if ($v -eq 'none') { return $null }
     if ($v -eq 'black') { return [Drawing.Color]::Black }
     if ($v -eq 'white') { return [Drawing.Color]::White }
@@ -1239,7 +1275,7 @@ function ConvertTo-GdiPath([string]$d) {
             continue
         }
         $rel = ($cmd -cmatch '[a-z]')
-        $up = $cmd.ToUpper()
+        $up = $cmd.ToUpperInvariant()
         $ox = 0.0; $oy = 0.0
         if ($rel) { $ox = $cx; $oy = $cy }
         if ($up -eq 'M') {
@@ -1413,13 +1449,14 @@ function Get-ArtGradientBrush($item, [System.Drawing.Color]$tint) {
     if ($item.Brush -and $item.BrushKey -eq $key) { return $item.Brush }
     if ($item.Brush) { $item.Brush.Dispose() }
     $r = $item.GR
-    $ep = New-Object System.Drawing.Drawing2D.GraphicsPath
+    $ep = [System.Drawing.Drawing2D.GraphicsPath]::new()
     $ep.AddEllipse([single]($item.GCx - $r), [single]($item.GCy - $r), [single]($r * 2), [single]($r * 2))
-    $pb = New-Object System.Drawing.Drawing2D.PathGradientBrush($ep)
+    $pb = [System.Drawing.Drawing2D.PathGradientBrush]::new($ep)
+    $ep.Dispose()                                          # the brush keeps its own copy
     $stops = $item.Grad.Stops
-    $cb = New-Object System.Drawing.Drawing2D.ColorBlend($stops.Count)
-    $cols = New-Object 'System.Drawing.Color[]' $stops.Count
-    $pos = New-Object 'single[]' $stops.Count
+    $cb = [System.Drawing.Drawing2D.ColorBlend]::new($stops.Count)
+    $cols = [System.Drawing.Color[]]::new($stops.Count)
+    $pos = [single[]]::new($stops.Count)
     for ($k = 0; $k -lt $stops.Count; $k++) {
         $st = $stops[$stops.Count - 1 - $k]        # PathGradientBrush runs edge(0) -> centre(1)
         $cols[$k] = Get-ArtTint $st.C $tint
@@ -1447,14 +1484,19 @@ function Write-StdIris($g, [System.Drawing.Color]$tint) {
         }
     }
     $it = $script:StdIris
-    $eb = New-Object System.Drawing.SolidBrush((Get-ArtTint ([System.Drawing.Color]::FromArgb(160, 0, 0)) $tint))
-    $g.FillPath($eb, $it.Path); $eb.Dispose()                  # no hairline gap at the rim
+    if ($it.EdgeKey -ne $tint.ToArgb()) {
+        if ($it.Edge) { $it.Edge.Dispose() }
+        $it.Edge = [System.Drawing.SolidBrush]::new((Get-ArtTint ([System.Drawing.Color]::FromArgb(160, 0, 0)) $tint)); $it.EdgeKey = $tint.ToArgb()
+    }
+    $g.FillPath($it.Edge, $it.Path)                            # no hairline gap at the rim
     $g.FillPath((Get-ArtGradientBrush $it $tint), $it.Path)
-    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Black, 10.0)
-    $g.DrawPath($pen, $it.Path); $pen.Dispose()
+    $g.DrawPath($script:IrisRimPen, $it.Path)
 }
+$script:IrisRimPen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black, 10.0)
 
-# Draw an eye's pattern items (already in 300x300 SVG space).
+# Draw an eye's pattern items (already in 300x300 SVG space). Brushes and pens are
+# kept per item for the current colour and fade: a frame is drawn up to 28 times a
+# second, and only the emerging Mangekyou (its fade) and the glow change them.
 function Write-ArtPattern($g, $art, [System.Drawing.Color]$tint, [double]$alpha = 1.0) {
     $a255 = [int][Math]::Round(255.0 * [Math]::Max(0.0, [Math]::Min(1.0, $alpha)))
     if ($art.Raster) {
@@ -1463,10 +1505,10 @@ function Write-ArtPattern($g, $art, [System.Drawing.Color]$tint, [double]$alpha 
         $key = "$($tint.R),$($tint.G),$($tint.B),$a255"
         if ($art.AttrKey -ne $key) {
             if ($art.Attr) { $art.Attr.Dispose() }
-            $cm = New-Object System.Drawing.Imaging.ColorMatrix
+            $cm = [System.Drawing.Imaging.ColorMatrix]::new()
             $cm.Matrix00 = $tint.R / 195.0; $cm.Matrix01 = $tint.G / 195.0; $cm.Matrix02 = $tint.B / 195.0
             $cm.Matrix11 = 1.0; $cm.Matrix22 = 1.0; $cm.Matrix33 = $a255 / 255.0; $cm.Matrix44 = 1.0
-            $ia = New-Object System.Drawing.Imaging.ImageAttributes
+            $ia = [System.Drawing.Imaging.ImageAttributes]::new()
             $ia.SetColorMatrix($cm)
             $art.Attr = $ia; $art.AttrKey = $key
         }
@@ -1486,21 +1528,29 @@ function Write-ArtPattern($g, $art, [System.Drawing.Color]$tint, [double]$alpha 
             $art.Scaled[$px] = $img
         }
         $g.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::HighQualityBilinear
-        $g.DrawImage($img, (New-Object System.Drawing.Rectangle(0, 0, 300, 300)), 0, 0, $px, $px, [System.Drawing.GraphicsUnit]::Pixel, $art.Attr)
+        $g.DrawImage($img, [System.Drawing.Rectangle]::new(0, 0, 300, 300), 0, 0, $px, $px, [System.Drawing.GraphicsUnit]::Pixel, $art.Attr)
         return
     }
+    $key = [long]$tint.ToArgb() * 256 + $a255
     foreach ($it in $art.Pattern) {
         if ($it.Fill) {
-            $br = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb($a255, (Get-ArtTint $it.Fill $tint)))
-            $g.FillPath($br, $it.Path); $br.Dispose()
+            if ($it.FillKey -ne $key) {
+                if ($it.FillBrush) { $it.FillBrush.Dispose() }
+                $it.FillBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb($a255, (Get-ArtTint $it.Fill $tint))); $it.FillKey = $key
+            }
+            $g.FillPath($it.FillBrush, $it.Path)
         }
         elseif ($it.Grad) {
             $g.FillPath((Get-ArtGradientBrush $it $tint), $it.Path)
         }
         if ($it.Stroke -and $it.Width -gt 0) {
-            $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::FromArgb($a255, (Get-ArtTint $it.Stroke $tint)), [single]$it.Width)
-            $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Miter; $pen.MiterLimit = 4
-            $g.DrawPath($pen, $it.Path); $pen.Dispose()
+            if ($it.StrokeKey -ne $key) {
+                if ($it.StrokePen) { $it.StrokePen.Dispose() }
+                $pen = [System.Drawing.Pen]::new([System.Drawing.Color]::FromArgb($a255, (Get-ArtTint $it.Stroke $tint)), [single]$it.Width)
+                $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Miter; $pen.MiterLimit = 4
+                $it.StrokePen = $pen; $it.StrokeKey = $key
+            }
+            $g.DrawPath($it.StrokePen, $it.Path)
         }
     }
 }
@@ -1676,6 +1726,8 @@ function Get-EvolveState([double]$u) {
 # 5. Sharingan Drawing Routine (128x128 High Resolution)
 # E: Current morph stage (0.0 to 4.0)
 # Angle: Rotation angle in radians
+$script:BlackBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::Black)   # these two never change
+$script:BorderPen = [System.Drawing.Pen]::new([System.Drawing.Color]::Black, 4.5)
 function Get-SharinganIcon($E, $Angle, $Style) {
     # Keys are "Set:Name". V1 eyes are drawn from their artwork in .\eyes\; Classic
     # eyes from the outlines traced from it (flat iris). A V1 eye whose file is
@@ -1691,18 +1743,19 @@ function Get-SharinganIcon($E, $Angle, $Style) {
     $evo = $null
     if ($E -gt 3.0) { $evo = Get-EvolveState ([Math]::Min(1.0, $E - 3.0)) }
 
-    # 128x128 pixel double-resolution canvas
-    $bmp = New-Object System.Drawing.Bitmap(128, 128)
+    # 128x128 pixel double-resolution canvas. Objects come from ::new, not New-Object:
+    # a frame is drawn up to 28 times a second and New-Object costs ~15x more per call.
+    $bmp = [System.Drawing.Bitmap]::new(128, 128)
     $g = [System.Drawing.Graphics]::FromImage($bmp)
-    
+
     # Configure ultra-high-quality GDI+ options
     $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
     $g.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
     $g.Clear([System.Drawing.Color]::Transparent)
 
-    $redBrush = New-Object System.Drawing.SolidBrush($global:eyeColor)
-    $blackBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Black)
-    $borderPen = New-Object System.Drawing.Pen([System.Drawing.Color]::Black, 4.5)
+    $redBrush = [System.Drawing.SolidBrush]::new($global:eyeColor)
+    $blackBrush = $script:BlackBrush
+    $borderPen = $script:BorderPen
     try {
 
     # A0. Glow: a heartbeat. Each beat ("lub", then a softer "dub") hits hard and
@@ -1723,10 +1776,10 @@ function Get-SharinganIcon($E, $Angle, $Style) {
                 [int]($global:eyeColor.G + ($hg - $global:eyeColor.G) * $beat),
                 [int]($global:eyeColor.B + ($hb - $global:eyeColor.B) * $beat))
             $redBrush.Dispose()
-            $redBrush = New-Object System.Drawing.SolidBrush($eyeDraw)
+            $redBrush = [System.Drawing.SolidBrush]::new($eyeDraw)
 
             # halo in the canvas margin, outside the eye (the eye keeps its size)
-            $haloBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb([int](70 * $beat), [int]$hr, [int]$hg, [int]$hb))
+            $haloBrush = [System.Drawing.SolidBrush]::new([System.Drawing.Color]::FromArgb([int](70 * $beat), [int]$hr, [int]$hg, [int]$hb))
             for ($gi = 0; $gi -lt 4; $gi++) {
                 $gr = 64.0 - ($gi * 1.2)
                 $g.FillEllipse($haloBrush, [float](64.0 - $gr), [float](64.0 - $gr), [float]($gr * 2), [float]($gr * 2))
@@ -1755,7 +1808,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
     elseif ($evo) { $ringAlpha = [int]($evo.RingA * 255) }
     if ($ringAlpha -gt 0) {
         $ringColor = [System.Drawing.Color]::FromArgb($ringAlpha, 0, 0, 0)
-        $ringPen = New-Object System.Drawing.Pen($ringColor, 3.2)
+        $ringPen = [System.Drawing.Pen]::new($ringColor, 3.2)
         $g.DrawEllipse($ringPen, 29, 29, 70, 70)
         $ringPen.Dispose()
     }
@@ -1767,7 +1820,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $full = $evo.Reveal -ge 57.9
         $pg = $g; $pb = $null
         if (-not $full) {
-            $pb = New-Object System.Drawing.Bitmap($bmp.Width, $bmp.Height)
+            $pb = [System.Drawing.Bitmap]::new($bmp.Width, $bmp.Height)
             $pg = [System.Drawing.Graphics]::FromImage($pb)
             $pg.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
             $pg.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::HighQuality
@@ -1783,7 +1836,7 @@ function Get-SharinganIcon($E, $Angle, $Style) {
         $pg.Restore($artState)
         if (-not $full) {
             $pg.Dispose()
-            $tb = New-Object System.Drawing.TextureBrush($pb)
+            $tb = [System.Drawing.TextureBrush]::new($pb)
             $tb.ScaleTransform([float](1.0 / $k), [float](1.0 / $k))
             $r = $evo.Reveal
             $g.FillEllipse($tb, [float](64.0 - $r), [float](64.0 - $r), [float](2.0 * $r), [float](2.0 * $r))
@@ -1865,25 +1918,23 @@ function Get-SharinganIcon($E, $Angle, $Style) {
     }
     catch { $bmp.Dispose(); throw }                          # nothing left behind if a frame fails
     finally {
-        # F. Cover cleanup
+        # F. Cover cleanup (the black brush and border pen are kept: $script:BlackBrush)
         $redBrush.Dispose()
-        $blackBrush.Dispose()
-        $borderPen.Dispose()
         $g.Dispose()
     }
 
     # Invert: black becomes the eye colour and the eye colour becomes black.
     # Every pixel is a blend of the two, so new = eyeColour - old, per channel.
     if ($global:invertOn) {
-        $cm = New-Object System.Drawing.Imaging.ColorMatrix
+        $cm = [System.Drawing.Imaging.ColorMatrix]::new()
         $cm.Matrix00 = -1.0; $cm.Matrix11 = -1.0; $cm.Matrix22 = -1.0; $cm.Matrix33 = 1.0; $cm.Matrix44 = 1.0
         $cm.Matrix40 = $eyeDraw.R / 255.0; $cm.Matrix41 = $eyeDraw.G / 255.0; $cm.Matrix42 = $eyeDraw.B / 255.0
-        $ia = New-Object System.Drawing.Imaging.ImageAttributes
+        $ia = [System.Drawing.Imaging.ImageAttributes]::new()
         $ia.SetColorMatrix($cm)
-        $inv = New-Object System.Drawing.Bitmap(128, 128)
+        $inv = [System.Drawing.Bitmap]::new(128, 128)
         $ig = [System.Drawing.Graphics]::FromImage($inv)
         $ig.CompositingMode = [System.Drawing.Drawing2D.CompositingMode]::SourceCopy
-        $ig.DrawImage($bmp, (New-Object System.Drawing.Rectangle(0, 0, 128, 128)), 0, 0, 128, 128, [System.Drawing.GraphicsUnit]::Pixel, $ia)
+        $ig.DrawImage($bmp, [System.Drawing.Rectangle]::new(0, 0, 128, 128), 0, 0, 128, 128, [System.Drawing.GraphicsUnit]::Pixel, $ia)
         $ig.Dispose(); $ia.Dispose(); $bmp.Dispose()
         $bmp = $inv
     }
@@ -1995,12 +2046,13 @@ $RenderFrame = {
     }
 
     # Draw a new frame only when it would look different. The dormant eye shows no
-    # rotation, and a paused or settled eye is still: those frames are skipped.
+    # rotation, and a paused or settled eye is still: those frames are skipped. So is a
+    # heartbeat between beats: its level (1/100 steps, below what shows) stands still.
     $angleKey = 0.0
     if ($cs -gt 0.0) { $angleKey = $global:rotationAngle }
     $key = "$cs|$angleKey|$($global:selectedEyeStyle)|$($global:eyeColor.ToArgb())|$($global:invertOn)|$($global:glowOn)"
-    $beating = $global:glowOn -and $global:glowPulse
-    if ($beating -or $key -ne $script:LastFrameKey) {
+    if ($global:glowOn -and $global:glowPulse) { $key += "|" + [Math]::Round((Get-HeartBeat), 2) }
+    if ($key -ne $script:LastFrameKey) {
         $iconObj = Get-SharinganIcon $global:currentStage $global:rotationAngle $global:selectedEyeStyle
         $NotifyIcon.Icon = $iconObj.Icon
         # Free the previous frame only once the new one is showing; the shown icon
